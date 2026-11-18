@@ -1,0 +1,45 @@
+rules:
+  - id: hardcoded-secret
+    patterns:
+      - pattern: $VAR = "..."
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i)(api_key|secret|password|token)
+    message: Mögliches hartcodiertes Secret gefunden.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-798"
+      shortDescription: "Hardcoded secret"
+
+  - id: os-system-call
+    pattern: os.system(...)
+    message: os.system() kann zu Command Injection führen.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-78"
+
+  - id: eval-use
+    pattern: eval(...)
+    message: eval() auf nicht vertrauenswürdiger Eingabe kann zu Code Injection führen.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-95"
+
+  - id: exec-use
+    pattern: exec(...)
+    message: exec() auf nicht vertrauenswürdiger Eingabe kann zu Code Injection führen.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-95"
+
+  - id: yaml-unsafe-load
+    pattern: yaml.load($DATA, Loader=yaml.Loader)
+    message: yaml.load() ohne SafeLoader kann beliebigen Python-Code ausführen.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-502"

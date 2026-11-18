@@ -1,0 +1,35 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/
+.venv/
+*.egg-info/
+
+# MLflow
+mlruns/
+mlflow.db
+
+# SQLite
+*.db
+*.sqlite3
+
+# Docker
+*.log
+
+# Editor
+.vscode/
+.idea/
+
+# Interne Projektdokumentation und Abgaben - gehoert nie ins oeffentliche Repo
+*.pdf
+
+# Temporaere Analyse- und Scan-Ausgaben
+scan_result.json
+pip_freeze.txt
+
+# OS
+.DS_Store
