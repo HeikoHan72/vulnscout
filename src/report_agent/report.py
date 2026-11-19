@@ -132,10 +132,12 @@ def generate_report(
     client = client or anthropic.Anthropic()
     user_prompt = build_report_prompt(context)
 
+    # Kein temperature-Parameter: Das Anthropic-SDK ab Version 2 kennt ihn
+    # nicht mehr. Die Zahlen im Bericht hängen ohnehin nicht vom Modell ab,
+    # sie werden im Prompt fest vorgegeben (siehe build_report_prompt).
     response = client.messages.create(
         model=model,
         max_tokens=MAX_TOKENS,
-        temperature=0,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )

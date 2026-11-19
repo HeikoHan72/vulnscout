@@ -16,12 +16,22 @@ from __future__ import annotations
 
 import os
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 
 from src.api.models import ScanRequest
 from src.orchestrator.models import ScanRun
 from src.orchestrator.orchestrator import run_pipeline
 from src.orchestrator.storage import RunStore
+
+# Lädt eine vorhandene .env-Datei, damit ANTHROPIC_API_KEY auch beim lokalen
+# Start (z. B. `uvicorn src.api.main:app`) gefunden wird. Ohne diesen Aufruf
+# würde die API lokal trotz eingetragenem Key in den Demo-Modus schalten und
+# ein Demo-Ergebnis liefern, das wie ein echter Lauf aussieht. Im Container
+# ist das unkritisch, weil Docker Compose die .env selbst einliest -
+# `load_dotenv` überschreibt bereits gesetzte Variablen nicht, dort gewinnt
+# also weiterhin die Container-Umgebung.
+load_dotenv()
 
 DB_PATH = os.environ.get("VULNSCOUT_DB_PATH", "vulnscout.db")
 

@@ -24,10 +24,10 @@ Nutze niedrige Werte (< 0.6) ehrlich, wenn der Kontext nicht eindeutig ist \
 - rate nicht künstlich sicher.
 5. Eine kurze, konkrete Begründung auf Deutsch (1-2 Sätze).
 
-Antworte ausschließlich über das Werkzeug `submit_triage`. Liefere darin \
-genau eine Bewertung pro übergebenem Fund, mit der exakt gleichen \
+Antworte ausschließlich als JSON-Objekt mit dem Schlüssel `assessments`. \
+Liefere genau eine Bewertung pro übergebenem Fund, mit der exakt gleichen \
 `finding_id`, wie sie dir gegeben wurde - erfinde keine neuen IDs und lasse \
-keinen Fund aus.
+keinen Fund aus. Kein Fließtext, keine Code-Fences um das JSON.
 """
 
 
@@ -71,5 +71,6 @@ def build_user_prompt(findings: list[Finding]) -> str:
     joined = "\n\n".join(blocks)
     return (
         f"Bewerte die folgenden {len(findings)} Fund(e). "
-        f"Rufe `submit_triage` mit einer Bewertung pro Fund auf:\n\n{joined}"
+        f"Antworte als JSON-Objekt mit einer Bewertung pro Fund "
+        f"unter `assessments`:\n\n{joined}"
     )

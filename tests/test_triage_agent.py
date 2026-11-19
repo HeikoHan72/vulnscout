@@ -7,6 +7,7 @@ laufen und deterministisch sind.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 import anthropic
@@ -17,16 +18,23 @@ from src.triage_agent.prompts import build_user_prompt
 from src.triage_agent.triage import triage_findings
 
 
-class _FakeToolUseBlock:
-    type = "tool_use"
+class _FakeTextBlock:
+    """Antwortblock im Structured-Outputs-Format: JSON als Text.
 
-    def __init__(self, input_data: dict) -> None:
-        self.input = input_data
+    Erzwungenes Tool-Use wird von der aktuellen Modellgeneration nicht mehr
+    unterstützt; der Triage-Agent fordert das Schema stattdessen über
+    `output_config` an und bekommt die Bewertung als JSON-Text zurück.
+    """
+
+    type = "text"
+
+    def __init__(self, payload: dict) -> None:
+        self.text = json.dumps(payload)
 
 
 class _FakeResponse:
     def __init__(self, input_data: dict) -> None:
-        self.content = [_FakeToolUseBlock(input_data)]
+        self.content = [_FakeTextBlock(input_data)]
 
 
 def _make_finding(finding_id: str = "f1", **overrides) -> Finding:
@@ -182,3 +190,39 @@ def test_raises_after_max_retries(monkeypatch: pytest.MonkeyPatch) -> None:
         triage_findings(findings, client=client)
 
     assert client.messages.create.call_count == 3  # MAX_RETRIES
+
+
+def test_programming_error_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ein TypeError kann bei keinem Versuch plötzlich funktionieren.
+
+    Hintergrund: Beim ersten echten API-Lauf wurde ein veralteter Parameter
+    an das SDK übergeben. Der daraus entstandene TypeError wurde dreimal mit
+    Backoff wiederholt, bevor er gemeldet wurde - verlorene Zeit ohne jede
+    Chance auf Erfolg. Programmierfehler müssen sofort durchschlagen.
+    """
+    monkeypatch.setattr("src.triage_agent.triage.time.sleep", lambda _seconds: None)
+
+    findings = [_make_finding("f1")]
+    client = MagicMock(spec=anthropic.Anthropic)
+    client.messages.create.side_effect = TypeError("unexpected keyword argument 'temperature'")
+
+    with pytest.raises(TypeError):
+        triage_findings(findings, client=client)
+
+    assert client.messages.create.call_count == 1
+
+
+def test_authentication_error_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ein falscher API-Key wird bei Wiederholung nicht richtig."""
+    monkeypatch.setattr("src.triage_agent.triage.time.sleep", lambda _seconds: None)
+
+    findings = [_make_finding("f1")]
+    client = MagicMock(spec=anthropic.Anthropic)
+    client.messages.create.side_effect = anthropic.AuthenticationError(
+        message="invalid x-api-key", response=MagicMock(), body=None
+    )
+
+    with pytest.raises(anthropic.AuthenticationError):
+        triage_findings(findings, client=client)
+
+    assert client.messages.create.call_count == 1

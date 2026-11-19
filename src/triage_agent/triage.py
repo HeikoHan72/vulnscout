@@ -15,6 +15,7 @@ Design-Entscheidungen (siehe Architektur-Planung):
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -35,41 +36,78 @@ CONFIDENCE_THRESHOLD = 0.6  # unterhalb davon: Consensus-Check
 MAX_RETRIES = 3
 MAX_TOKENS = 4096
 
-TOOL_SCHEMA = {
-    "name": "submit_triage",
-    "description": "Übermittelt die Sicherheitsbewertung für einen oder mehrere Scanner-Funde.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "assessments": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "finding_id": {"type": "string"},
-                        "is_true_positive": {"type": "boolean"},
-                        "severity": {
-                            "type": "string",
-                            "enum": ["low", "medium", "high", "critical"],
-                        },
-                        "cvss_score": {"type": "number", "minimum": 0, "maximum": 10},
-                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                        "reasoning": {"type": "string"},
+# Nur Fehler, die bei einem erneuten Versuch realistisch verschwinden können:
+# Netzwerk-/Zeitprobleme, Rate-Limits und serverseitige Störungen, dazu
+# unbrauchbare Modellantworten (fehlender tool_use-Block -> RuntimeError,
+# Schema-Verletzung beim Validieren -> ValueError).
+#
+# Bewusst NICHT enthalten: Programmierfehler (TypeError), Authentifizierungs-
+# und Anfragefehler (falscher Key, ungültige Parameter) sowie erreichte
+# Ausgabenlimits. Die scheitern bei jedem Versuch gleich und würden nur
+# Wartezeit und im schlimmsten Fall Guthaben kosten. Ein früherer Lauf hat
+# genau das gezeigt: Ein TypeError wurde dreimal mit Backoff wiederholt,
+# obwohl er nie hätte erfolgreich werden können.
+RETRYABLE_ERRORS = (
+    anthropic.APIConnectionError,  # schließt APITimeoutError ein
+    anthropic.RateLimitError,
+    anthropic.InternalServerError,
+    anthropic.OverloadedError,
+    anthropic.ServiceUnavailableError,
+    anthropic.GatewayTimeoutError,
+    RuntimeError,
+    ValueError,
+)
+
+# Erzwungenes Tool-Use (tool_choice type "tool") wird von dieser Modell-
+# generation nicht mehr unterstützt - die API lehnt es mit HTTP 400 ab.
+# Stattdessen Structured Outputs: Das Schema wird über output_config
+# vorgegeben, die Antwort kommt als JSON-Text zurück und ist damit ohne
+# Umweg über einen Werkzeugaufruf auswertbar.
+# Wichtig: Structured Outputs verlangt bei jedem Objekt-Typ ein explizites
+# "additionalProperties": False - fehlt es, lehnt die API die Anfrage mit
+# HTTP 400 ab. Das gilt auch für verschachtelte Objekte, hier also sowohl
+# für die Wurzel als auch für die einzelnen Bewertungen.
+TRIAGE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "assessments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "finding_id": {"type": "string"},
+                    "is_true_positive": {"type": "boolean"},
+                    "severity": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high", "critical"],
                     },
-                    "required": [
-                        "finding_id",
-                        "is_true_positive",
-                        "severity",
-                        "cvss_score",
-                        "confidence",
-                        "reasoning",
-                    ],
+                    # Ohne minimum/maximum: Structured Outputs unterstützt
+                    # diese Angaben bei "number" nicht (HTTP 400). Die
+                    # Wertebereiche (0-10 bzw. 0-1) prüft stattdessen das
+                    # pydantic-Modell TriageAssessment. Eine Verletzung wird
+                    # dort zu einem ValidationError (Unterklasse von
+                    # ValueError) und löst damit einen erneuten Versuch aus.
+                    "cvss_score": {"type": "number"},
+                    "confidence": {"type": "number"},
+                    "reasoning": {"type": "string"},
                 },
-            }
-        },
-        "required": ["assessments"],
+                "required": [
+                    "finding_id",
+                    "is_true_positive",
+                    "severity",
+                    "cvss_score",
+                    "confidence",
+                    "reasoning",
+                ],
+            },
+        }
     },
+    "required": ["assessments"],
 }
+
+OUTPUT_CONFIG = {"format": {"type": "json_schema", "schema": TRIAGE_SCHEMA}}
 
 
 def _call_llm(
@@ -78,27 +116,36 @@ def _call_llm(
     """Genau ein LLM-Aufruf für eine Gruppe von Findings.
 
     Gibt eine Zuordnung finding_id -> TriageAssessment zurück. Wirft
-    `RuntimeError`, wenn die Antwort keinen gültigen tool_use-Block
-    enthält - das behandelt `_call_llm_with_retry`.
+    `RuntimeError`, wenn die Antwort keinen auswertbaren Text enthält,
+    und `ValueError`, wenn der Text kein gültiges JSON ist - beides
+    behandelt `_call_llm_with_retry`.
     """
     user_prompt = build_user_prompt(findings)
 
+    # Hinweis: Frühere Fassungen setzten hier temperature=0 für deterministische
+    # Bewertungen. Das Anthropic-SDK ab Version 2 kennt diesen Parameter nicht
+    # mehr (ersatzlos entfallen, auch nicht in output_config). Die Stabilität
+    # der Bewertung wird stattdessen über das JSON-Schema (Structured Outputs)
+    # und den Consensus-Check bei niedriger Konfidenz abgesichert.
     response = client.messages.create(
         model=model,
         max_tokens=MAX_TOKENS,
-        temperature=0,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
-        tools=[TOOL_SCHEMA],
-        tool_choice={"type": "tool", "name": "submit_triage"},
+        output_config=OUTPUT_CONFIG,
     )
 
-    tool_use = next((block for block in response.content if block.type == "tool_use"), None)
-    if tool_use is None:
-        raise RuntimeError("LLM-Antwort enthielt keinen tool_use-Block.")
+    text_block = next((block for block in response.content if block.type == "text"), None)
+    if text_block is None:
+        raise RuntimeError("LLM-Antwort enthielt keinen Text-Block.")
+
+    # json.JSONDecodeError ist eine Unterklasse von ValueError und damit
+    # wiederholbar: Eine abgeschnittene oder fehlerhafte Antwort kann beim
+    # nächsten Versuch korrekt kommen.
+    payload = json.loads(text_block.text)
 
     assessments: dict[str, TriageAssessment] = {}
-    for item in tool_use.input.get("assessments", []):
+    for item in payload.get("assessments", []):
         assessment = TriageAssessment(**item)
         assessments[assessment.finding_id] = assessment
     return assessments
@@ -116,7 +163,7 @@ def _call_llm_with_retry(
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             return _call_llm(client, findings, model)
-        except (anthropic.APIError, ValueError, TypeError) as exc:
+        except RETRYABLE_ERRORS as exc:
             last_exc = exc
             logger.warning(
                 "LLM-Aufruf fehlgeschlagen (Versuch %d/%d): %s", attempt, MAX_RETRIES, exc
