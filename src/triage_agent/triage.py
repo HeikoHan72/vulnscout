@@ -23,6 +23,7 @@ from typing import Optional
 
 import anthropic
 
+from src.monitoring import metrics as m
 from src.scanner_agent.models import Finding
 
 from .models import TriageAssessment
@@ -151,6 +152,26 @@ def _call_llm(
     return assessments
 
 
+def _observe_llm_call(
+    result: str, duration: float, exc: Optional[Exception] = None
+) -> None:
+    """Zählt einen LLM-Aufruf für das Monitoring.
+
+    Bewusst best-effort: Schlägt das Zählen fehl, darf das den Aufruf
+    nicht beeinflussen. Die Latenz wird nur bei erfolgreichen Aufrufen
+    gemessen - die Dauer eines abgebrochenen Versuchs sagt nichts über
+    die Antwortzeit des Modells aus.
+    """
+    try:
+        m.LLM_REQUESTS.labels(result).inc()
+        if result == "ok":
+            m.LLM_LATENCY.observe(duration)
+        if exc is not None:
+            m.LLM_ERRORS.labels(type(exc).__name__).inc()
+    except Exception:  # noqa: BLE001 - Monitoring darf den Aufruf nie kippen
+        logger.exception("LLM-Metriken konnten nicht gezählt werden")
+
+
 def _call_llm_with_retry(
     client: anthropic.Anthropic, findings: list[Finding], model: str
 ) -> dict[str, TriageAssessment]:
@@ -161,15 +182,25 @@ def _call_llm_with_retry(
     """
     last_exc: Optional[Exception] = None
     for attempt in range(1, MAX_RETRIES + 1):
+        start = time.perf_counter()
         try:
-            return _call_llm(client, findings, model)
+            result = _call_llm(client, findings, model)
         except RETRYABLE_ERRORS as exc:
             last_exc = exc
+            # Für das Monitoring: Art des Fehlers als Label, nicht die
+            # Meldung - die enthält wechselnde Details und würde pro Fehler
+            # eine eigene Zeitreihe erzeugen.
+            _observe_llm_call("retry", time.perf_counter() - start, exc)
             logger.warning(
                 "LLM-Aufruf fehlgeschlagen (Versuch %d/%d): %s", attempt, MAX_RETRIES, exc
             )
             if attempt < MAX_RETRIES:
                 time.sleep(2**attempt)
+        else:
+            _observe_llm_call("ok", time.perf_counter() - start)
+            return result
+
+    _observe_llm_call("failed", 0.0)
     raise RuntimeError(f"LLM-Aufruf nach {MAX_RETRIES} Versuchen fehlgeschlagen: {last_exc}")
 
 

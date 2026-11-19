@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections import Counter
 from typing import Optional
 
 import anthropic
 
+from src.monitoring import metrics as m
 from src.scanner_agent.models import Finding, Severity
 from src.triage_agent.models import TriageAssessment
 
@@ -111,6 +113,25 @@ def _render_empty_report(context: ReportContext) -> str:
     return "\n".join(lines)
 
 
+
+def _observe_llm_call(
+    result: str, duration: float, exc: Optional[Exception] = None
+) -> None:
+    """Zählt den LLM-Aufruf des Report-Agenten für das Monitoring.
+
+    Best-effort wie überall beim Monitoring: Ein Fehler beim Zählen darf
+    die Berichtserstellung nicht beeinflussen.
+    """
+    try:
+        m.LLM_REQUESTS.labels(result).inc()
+        if result == "ok":
+            m.LLM_LATENCY.observe(duration)
+        if exc is not None:
+            m.LLM_ERRORS.labels(type(exc).__name__).inc()
+    except Exception:  # noqa: BLE001 - Monitoring darf den Lauf nie kippen
+        logger.exception("LLM-Metriken konnten nicht gezählt werden")
+
+
 def generate_report(
     findings: list[Finding],
     assessments: list[TriageAssessment],
@@ -135,12 +156,21 @@ def generate_report(
     # Kein temperature-Parameter: Das Anthropic-SDK ab Version 2 kennt ihn
     # nicht mehr. Die Zahlen im Bericht hängen ohnehin nicht vom Modell ab,
     # sie werden im Prompt fest vorgegeben (siehe build_report_prompt).
-    response = client.messages.create(
-        model=model,
-        max_tokens=MAX_TOKENS,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}],
-    )
+    start = time.perf_counter()
+    try:
+        response = client.messages.create(
+            model=model,
+            max_tokens=MAX_TOKENS,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+    except Exception as exc:
+        # Für das Monitoring zählen, dann unverändert weiterwerfen: Der
+        # Orchestrator markiert den Lauf als fehlgeschlagen.
+        _observe_llm_call("failed", 0.0, exc)
+        raise
+
+    _observe_llm_call("ok", time.perf_counter() - start)
 
     text_block = next((block for block in response.content if block.type == "text"), None)
     if text_block is None:

@@ -149,3 +149,84 @@ def test_record_run_swallows_errors(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # Darf keine Ausnahme nach außen geben.
     record_run(_make_run(), duration_seconds=1.0)
+
+
+# --- LLM-Metriken ------------------------------------------------------------
+#
+# Die Zähler sind definiert, werden aber erst in den Agenten gesetzt. Genau
+# diese Verdrahtung fehlte zunächst: Das Dashboard-Panel wäre dauerhaft leer
+# geblieben, ohne dass ein Test angeschlagen hätte. Ein leeres Panel ist
+# nicht unterscheidbar von "alles in Ordnung" - deshalb diese Tests.
+
+
+class _TextBlock:
+    type = "text"
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class _Response:
+    def __init__(self, text: str) -> None:
+        self.content = [_TextBlock(text)]
+
+
+_TRIAGE_JSON = (
+    '{"assessments":[{"finding_id":"f1","is_true_positive":true,'
+    '"severity":"high","cvss_score":7.0,"confidence":0.9,"reasoning":"r"}]}'
+)
+
+
+def test_successful_triage_call_is_counted() -> None:
+    import anthropic
+
+    from src.triage_agent.triage import triage_findings
+
+    before = _value(m.LLM_REQUESTS, result="ok")
+
+    client = MagicMock(spec=anthropic.Anthropic)
+    client.messages.create.return_value = _Response(_TRIAGE_JSON)
+    triage_findings([_make_finding("f1")], client=client)
+
+    assert _value(m.LLM_REQUESTS, result="ok") == before + 1
+
+
+def test_retried_triage_call_counts_retries_and_error_kind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import anthropic
+
+    from src.triage_agent.triage import triage_findings
+
+    monkeypatch.setattr("src.triage_agent.triage.time.sleep", lambda _s: None)
+
+    before_retry = _value(m.LLM_REQUESTS, result="retry")
+    before_failed = _value(m.LLM_REQUESTS, result="failed")
+    before_kind = _value(m.LLM_ERRORS, kind="APIConnectionError")
+
+    client = MagicMock(spec=anthropic.Anthropic)
+    client.messages.create.side_effect = anthropic.APIConnectionError(request=MagicMock())
+
+    with pytest.raises(RuntimeError):
+        triage_findings([_make_finding("f1")], client=client)
+
+    # Drei Versuche, danach endgültiger Abbruch.
+    assert _value(m.LLM_REQUESTS, result="retry") == before_retry + 3
+    assert _value(m.LLM_REQUESTS, result="failed") == before_failed + 1
+    assert _value(m.LLM_ERRORS, kind="APIConnectionError") == before_kind + 3
+
+
+def test_successful_report_call_is_counted() -> None:
+    import anthropic
+
+    from src.report_agent.report import generate_report
+
+    before = _value(m.LLM_REQUESTS, result="ok")
+
+    client = MagicMock(spec=anthropic.Anthropic)
+    client.messages.create.return_value = _Response("# Bericht")
+    generate_report(
+        [_make_finding("f1")], [_make_assessment("f1")], "repo", client=client
+    )
+
+    assert _value(m.LLM_REQUESTS, result="ok") == before + 1
