@@ -62,6 +62,31 @@ Protokolliert pro Lauf Parameter (Repo-Pfad, Status), Metriken (Laufzeit, Funde 
 - `GET /scans/{run_id}` – liest den gespeicherten Lauf (auch bei `failed`), HTTP 404 wenn unbekannt.
 - `GET /scans/{run_id}/report` – liefert nur den Markdown-Bericht, HTTP 409 wenn noch nicht fertig.
 
+### Monitoring (`src/monitoring/`, `monitoring/`)
+
+Zwei getrennte Aufgaben, die oft verwechselt werden:
+
+- **MLflow** (`src/tracking/`) hält **jeden einzelnen Lauf dauerhaft** fest, damit man im Nachhinein vergleichen kann: Welcher Lauf fand wie viele Funde, wie lange dauerte er, wie sah der Bericht aus?
+- **Prometheus** (`src/monitoring/`) beschreibt den **laufenden Betrieb in Zahlen**: Wie viele Anfragen gerade, wie viele Fehler, wie schnell. Daraus entstehen Dashboards und Alarme.
+
+`src/monitoring/metrics.py` definiert die Kennzahlen (Counter für Dinge, die nur hochzählen; Histogramme für Messwerte wie Laufzeiten, aus denen Prometheus Quantile berechnet). `src/monitoring/record.py` überträgt das Ergebnis eines Laufs in diese Kennzahlen und wird vom Orchestrator an derselben Stelle aufgerufen wie das MLflow-Tracking – im Erfolgs- wie im Fehlerfall. Wie das Tracking ist es **best-effort**: Ein Fehler beim Zählen wird geloggt, nie weitergeworfen.
+
+Eine Middleware in der API misst bei jeder Anfrage Pfad, Methode, Status und Dauer. Als Label dient die Routen-Vorlage (`/scans/{run_id}`), nicht der konkrete Pfad – sonst entstünde pro Lauf-ID eine eigene Zeitreihe und die Zahl der Zeitreihen würde unbegrenzt wachsen.
+
+Erfasst werden:
+
+| Bereich | Kennzahlen |
+|---|---|
+| HTTP | Anfragen nach Pfad/Methode/Status, Antwortzeit |
+| Scans | Läufe nach Ergebnis, Dauer, Betriebsart (Demo oder LLM) |
+| Scanner | Funde je Werkzeug, Ausfälle je Werkzeug |
+| Triage | Ergebnisse (bestätigt, Fehlalarm, kein Konsens), Konfidenzverteilung, bestätigte Funde je Schweregrad |
+| LLM | Aufrufe nach Ergebnis, Latenz, Fehler nach Art |
+
+`monitoring/prometheus.yml` legt fest, dass Prometheus die API alle fünf Sekunden abfragt. `monitoring/alerts.yml` enthält die Alarmregeln, `monitoring/grafana/` die Datenquelle und das Dashboard. Alle drei Dienste starten über Docker Compose, gebunden an `127.0.0.1` – Grafana läuft ohne Anmeldung und wäre im Netzwerk sonst offen.
+
+**Warum ein Scanner-Ausfall einen eigenen Alarm hat:** Fällt ein Werkzeug aus, liefert es keine Funde. Ein Bericht ohne Funde liest sich wie eine saubere Codebasis, ist aber in Wahrheit eine Lücke in der Prüfung. Der Alarm `ScannerFaelltAus` trennt diese beiden Fälle.
+
 ### Containerisierung & CI
 
 Docker-Image auf Basis `python:3.11-slim`, läuft als nicht-root-Nutzer, mit `HEALTHCHECK` gegen `/health`. Docker Compose bindet Port 8000, lädt `.env`, persistiert die SQLite-Datenbank in einem benannten Volume. GitHub Actions (`ci.yml`) installiert Abhängigkeiten und führt `pytest` bei jedem Push/PR auf `main` aus.
@@ -96,5 +121,7 @@ Die Datenbank ist die einzige Quelle der Wahrheit für den Laufstatus; die FastA
 - Schlägt `POST /scans` fehl, enthält die Fehlerantwort nicht die Lauf-ID des fehlgeschlagenen Versuchs.
 - Semgrep mit Registry-Ruleset (`p/security-audit`) braucht beim ersten Lauf Internetzugang; ohne Netzwerk nur über ein eigenes lokales Regelwerk nutzbar.
 - Noch nicht gegen einen echten, separat laufenden MLflow-Tracking-Server (`mlflow server`) getestet – bisher nur gegen den lokalen File-Store.
+- Die Prometheus-Kennzahlen leben im Arbeitsspeicher des API-Prozesses. Läufe, die direkt per Kommandozeile gestartet werden, erscheinen nicht unter `/metrics`. Bei mehreren API-Prozessen (etwa mit mehreren Uvicorn-Workern) würde jeder Prozess eigene Zähler führen; dafür wäre der Multiprozess-Modus von `prometheus_client` nötig.
+- Prometheus wertet die Alarmregeln aus, versendet aber nichts: Es gibt keinen Alertmanager und damit keine Benachrichtigung per E-Mail oder Chat. Die Alarme sind nur in der Prometheus-Oberfläche sichtbar.
 
 Eine ehrliche, nutzerorientierte Zusammenfassung der Grenzen (Evaluationsumfang, bekannte Fehlklassifikationen) folgt im README nach Projektabschluss.

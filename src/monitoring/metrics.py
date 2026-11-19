@@ -1,0 +1,118 @@
+"""Kennzahlen (Metriken) für das Monitoring mit Prometheus.
+
+Prometheus holt diese Zahlen regelmäßig über den Endpunkt `/metrics` ab
+("scrapen"). Zwei Arten kommen vor:
+
+* **Counter** zählt nur nach oben (Anzahl Scans, Anzahl Fehler). Für sich
+  allein wenig aussagekräftig - Prometheus rechnet daraus die Rate, also
+  "wie viele pro Sekunde gerade".
+* **Histogram** sortiert Messwerte in Eimer (Buckets), etwa Laufzeiten.
+  Daraus berechnet Prometheus Quantile wie p50 oder p95.
+
+**Labels** teilen eine Metrik auf (z. B. nach Tool oder Schweregrad). Jede
+Kombination ist eine eigene Zeitreihe, deshalb dürfen Labels nur wenige
+verschiedene Werte annehmen - niemals etwa eine Lauf-ID, sonst wächst die
+Zahl der Zeitreihen unbegrenzt.
+
+Wichtige Einschränkung: Diese Zähler leben im Arbeitsspeicher des Prozesses,
+der die API bedient. Nur Läufe über `POST /scans` erscheinen daher unter
+`/metrics`; ein Lauf, der direkt per Kommandozeile gestartet wird, läuft in
+einem eigenen Prozess und taucht hier nicht auf.
+"""
+
+from __future__ import annotations
+
+from prometheus_client import Counter, Histogram
+
+# --- HTTP: die goldenen Signale (Verkehr, Fehler, Latenz) --------------------
+
+HTTP_REQUESTS = Counter(
+    "vulnscout_http_requests_total",
+    "Anzahl HTTP-Anfragen",
+    ["path", "method", "status"],
+)
+
+HTTP_LATENCY = Histogram(
+    "vulnscout_http_latency_seconds",
+    "Antwortzeit der API in Sekunden",
+    ["path"],
+    # Breite Spanne: /health antwortet in Millisekunden, ein vollständiger
+    # Scan über POST /scans läuft synchron und kann Minuten dauern.
+    buckets=[0.005, 0.025, 0.1, 0.5, 1, 5, 15, 30, 60, 120, 300, 600],
+)
+
+# --- Scans: Durchsatz, Dauer, Ausgang ----------------------------------------
+
+SCANS = Counter(
+    "vulnscout_scans_total",
+    "Abgeschlossene Scan-Läufe nach Ergebnis",
+    ["status"],  # completed, failed
+)
+
+SCAN_DURATION = Histogram(
+    "vulnscout_scan_duration_seconds",
+    "Dauer eines vollständigen Scan-Laufs in Sekunden",
+    buckets=[5, 15, 30, 60, 120, 300, 600, 1200],
+)
+
+SCAN_MODE = Counter(
+    "vulnscout_scan_mode_total",
+    "Scan-Läufe nach Betriebsart",
+    ["mode"],  # demo, llm
+)
+
+# --- Scanner: was die Werkzeuge gefunden haben -------------------------------
+
+FINDINGS = Counter(
+    "vulnscout_findings_total",
+    "Rohe Scanner-Funde nach Werkzeug",
+    ["tool"],  # bandit, pip-audit, semgrep
+)
+
+SCANNER_ERRORS = Counter(
+    "vulnscout_scanner_errors_total",
+    "Fehlgeschlagene Scanner-Aufrufe nach Werkzeug",
+    ["tool"],
+)
+
+# --- Triage: wie das LLM die Funde bewertet ----------------------------------
+
+TRIAGE_RESULTS = Counter(
+    "vulnscout_triage_results_total",
+    "Bewertete Funde nach Ergebnis der Triage",
+    ["result"],  # true_positive, false_positive, needs_review
+)
+
+CONFIRMED_BY_SEVERITY = Counter(
+    "vulnscout_confirmed_findings_total",
+    "Bestätigte Funde nach Schweregrad",
+    ["severity"],
+)
+
+TRIAGE_CONFIDENCE = Histogram(
+    "vulnscout_triage_confidence",
+    "Konfidenz der Triage-Bewertung",
+    # Die Schwelle für den Consensus-Check liegt bei 0,6 - deshalb liegen
+    # mehrere Eimergrenzen bewusst um diesen Wert herum.
+    buckets=[0.3, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0],
+)
+
+# --- LLM: wie es dem Sprachmodell geht ---------------------------------------
+
+LLM_REQUESTS = Counter(
+    "vulnscout_llm_requests_total",
+    "Aufrufe des Sprachmodells nach Ergebnis",
+    ["result"],  # ok, retry, failed
+)
+
+LLM_ERRORS = Counter(
+    "vulnscout_llm_errors_total",
+    "Fehler beim Aufruf des Sprachmodells nach Art",
+    ["kind"],  # z. B. APIConnectionError, RateLimitError
+)
+
+LLM_LATENCY = Histogram(
+    "vulnscout_llm_latency_seconds",
+    "Antwortzeit eines einzelnen LLM-Aufrufs in Sekunden",
+    buckets=[0.5, 1, 2, 5, 10, 20, 30, 60, 120],
+)

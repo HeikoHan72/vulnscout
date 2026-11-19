@@ -1,0 +1,8 @@
+# Grafana lädt beim Start alle Dashboards aus diesem Ordner im Container.
+apiVersion: 1
+providers:
+  - name: vulnscout
+    folder: VulnScout
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

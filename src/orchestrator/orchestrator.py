@@ -13,6 +13,7 @@ from typing import Optional
 import anthropic
 
 from src.demo.fixtures import fixture_report, fixture_triage
+from src.monitoring.record import record_run
 from src.report_agent.report import build_report_context, generate_report
 from src.scanner_agent.scanner import run_all_scanners
 from src.tracking.mlflow_tracking import log_run
@@ -68,10 +69,12 @@ def run_pipeline(
     run = ScanRun(repo_path=repo_path, status=RunStatus.SCANNING)
     store.create_run(run)
     start_time = time.monotonic()
+    findings: list = []
     assessments: list = []
 
     try:
         scan_result = run_all_scanners(repo_path, semgrep_config=semgrep_config)
+        findings = scan_result.findings
         store.save_findings(run.id, scan_result.findings)
         run.scanner_errors = scan_result.errors
         run.status = RunStatus.TRIAGING
@@ -115,8 +118,24 @@ def run_pipeline(
         run.updated_at = datetime.now(timezone.utc)
         store.update_run(run)
         logger.exception("VulnScout-Lauf %s fehlgeschlagen", run.id)
-        log_run(run, assessments, duration_seconds=time.monotonic() - start_time)
+        duration = time.monotonic() - start_time
+        log_run(run, assessments, duration_seconds=duration)
+        record_run(
+            run,
+            findings=findings,
+            assessments=assessments,
+            duration_seconds=duration,
+            demo_mode=demo_mode,
+        )
         raise
 
-    log_run(run, assessments, duration_seconds=time.monotonic() - start_time)
+    duration = time.monotonic() - start_time
+    log_run(run, assessments, duration_seconds=duration)
+    record_run(
+        run,
+        findings=findings,
+        assessments=assessments,
+        duration_seconds=duration,
+        demo_mode=demo_mode,
+    )
     return run

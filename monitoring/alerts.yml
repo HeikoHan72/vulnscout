@@ -1,0 +1,84 @@
+# Alarmregeln für Prometheus.
+#
+# expr: eine Abfrage in PromQL. Ist sie wahr, wird der Alarm "pending".
+# for:  So lange muss sie wahr bleiben, bis der Alarm "firing" wird.
+#       Ohne "for" feuert der Alarm sofort.
+
+groups:
+  - name: vulnscout-api
+    rules:
+      - alert: ApiNichtErreichbar
+        # up = 1: Prometheus erreicht die API. up = 0: nicht erreichbar.
+        expr: up{job="vulnscout-api"} == 0
+        for: 30s
+        labels:
+          schwere: kritisch
+        annotations:
+          zusammenfassung: "Prometheus erreicht die VulnScout-API nicht."
+
+      - alert: HoheFehlerquote
+        # Mehr als 10 % aller Anfragen enden mit einem Server- oder
+        # Clientfehler. /metrics und /health bleiben außen vor, sonst
+        # verzerren die regelmäßigen Abfragen von Prometheus die Quote.
+        expr: |
+          sum(rate(vulnscout_http_requests_total{status=~"4..|5..", path!~"/metrics|/health"}[2m]))
+            / sum(rate(vulnscout_http_requests_total{path!~"/metrics|/health"}[2m])) > 0.1
+        for: 1m
+        labels:
+          schwere: warnung
+        annotations:
+          zusammenfassung: "Mehr als 10 % der API-Anfragen schlagen fehl."
+
+      - alert: ScansSchlagenFehl
+        # Mindestens ein Scan-Lauf ist in den letzten fünf Minuten
+        # fehlgeschlagen (Scanner, Triage oder Report).
+        expr: sum(increase(vulnscout_scans_total{status="failed"}[5m])) > 0
+        labels:
+          schwere: warnung
+        annotations:
+          zusammenfassung: "Mindestens ein Scan-Lauf ist fehlgeschlagen."
+
+      - alert: ScannerFaelltAus
+        # Ein Scanner-Werkzeug meldet Fehler. Wichtig, weil ein
+        # ausgefallenes Werkzeug keine Funde liefert - das sieht in einem
+        # Bericht aus wie "sauberer Code", ist aber eine Lücke in der
+        # Prüfung.
+        expr: sum by (tool) (increase(vulnscout_scanner_errors_total[10m])) > 0
+        labels:
+          schwere: warnung
+        annotations:
+          zusammenfassung: "Das Werkzeug {{ $labels.tool }} ist bei einem Scan ausgefallen."
+
+      - alert: TriageUnsicher
+        # Der Median der Triage-Konfidenz liegt unter 0,6 - genau der
+        # Schwelle, ab der ein Consensus-Check ausgelöst wird. Dauerhaft
+        # niedrige Werte sprechen für ungewohnte Eingaben oder einen
+        # schlechter gewordenen Prompt.
+        expr: |
+          histogram_quantile(0.5, sum by (le) (rate(vulnscout_triage_confidence_bucket[10m]))) < 0.6
+        for: 5m
+        labels:
+          schwere: warnung
+        annotations:
+          zusammenfassung: "Die Triage ist sich ungewöhnlich unsicher. Eingaben und Prompt prüfen."
+
+      - alert: LlmFehler
+        # Fehler beim Aufruf des Sprachmodells (Netz, Rate-Limit,
+        # Serverstörung). Einzelne Fehler fängt der Retry ab, gehäufte
+        # nicht.
+        expr: sum(increase(vulnscout_llm_errors_total[5m])) > 3
+        labels:
+          schwere: warnung
+        annotations:
+          zusammenfassung: "Mehr als drei LLM-Fehler in fünf Minuten."
+
+      - alert: ScanDauertUngewoehnlichLang
+        # p95 der Scan-Dauer über zehn Minuten. Ein einzelner großer Scan
+        # ist unkritisch, ein dauerhafter Anstieg nicht.
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(vulnscout_scan_duration_seconds_bucket[15m]))) > 600
+        for: 5m
+        labels:
+          schwere: info
+        annotations:
+          zusammenfassung: "95 % der Scans brauchen länger als zehn Minuten."

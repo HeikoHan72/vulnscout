@@ -9,3 +9,6 @@ mlruns/
 tests/
 docs/
 README.md
+# Die Monitoring-Konfiguration wird von Compose als Volume eingehängt,
+# sie gehört nicht ins API-Image.
+monitoring/

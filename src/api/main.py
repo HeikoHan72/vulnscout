@@ -15,11 +15,14 @@ Stand-Dokument, Offene Punkte, für mögliche Erweiterungen.
 from __future__ import annotations
 
 import os
+import time
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from src.api.models import ScanRequest
+from src.monitoring import metrics as m
 from src.orchestrator.models import ScanRun
 from src.orchestrator.orchestrator import run_pipeline
 from src.orchestrator.storage import RunStore
@@ -46,6 +49,30 @@ app = FastAPI(
 )
 
 
+@app.middleware("http")
+async def measure(request: Request, call_next):
+    """Misst bei jeder Anfrage Dauer und Ausgang.
+
+    Das sind die goldenen Signale: Verkehr (wie viele Anfragen), Fehler
+    (welcher Status) und Latenz (wie lange).
+
+    Als Label wird die Routen-Vorlage benutzt (z. B. `/scans/{run_id}`),
+    nicht der konkrete Pfad. Sonst entstünde für jede einzelne Lauf-ID
+    eine eigene Zeitreihe, und die Zahl der Zeitreihen würde mit jedem
+    Scan wachsen.
+    """
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration = time.perf_counter() - start
+
+    route = request.scope.get("route")
+    path = route.path if route else "unbekannt"
+
+    m.HTTP_REQUESTS.labels(path, request.method, str(response.status_code)).inc()
+    m.HTTP_LATENCY.labels(path).observe(duration)
+    return response
+
+
 def _get_store() -> RunStore:
     """Erzeugt die Persistenzschicht für die konfigurierte DB-Datei.
 
@@ -59,6 +86,17 @@ def _get_store() -> RunStore:
 def health() -> dict:
     """Einfacher Erreichbarkeits-Check."""
     return {"status": "ok"}
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics() -> Response:
+    """Alle Kennzahlen im Textformat von Prometheus.
+
+    Prometheus ruft diesen Endpunkt regelmäßig ab. Bewusst nicht in der
+    OpenAPI-Dokumentation aufgeführt, weil er sich nicht an menschliche
+    Nutzer richtet.
+    """
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.post("/scans", response_model=ScanRun)

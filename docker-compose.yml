@@ -1,14 +1,61 @@
+# Startet den vollständigen VulnScout-Stack mit einem Befehl:
+#   api         - die Scan-API (Bandit, pip-audit, Semgrep, LLM-Triage, Bericht)
+#   prometheus  - sammelt die Kennzahlen der API über /metrics
+#   grafana     - zeigt die Kennzahlen als Dashboard
+#
+# Die Container finden sich gegenseitig über den Dienstnamen, z. B. http://api:8000.
+#
+# Alle Ports sind an 127.0.0.1 gebunden: Die Dienste sind nur von diesem
+# Rechner erreichbar, nicht aus dem Netzwerk. Das ist wichtig, weil Grafana
+# hier ohne Anmeldung läuft und die API ungeschützt Scans startet.
+
 services:
   api:
     build: .
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     environment:
       - VULNSCOUT_DB_PATH=/app/data/vulnscout.db
     volumes:
       - vulnscout_data:/app/data
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.13.5
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      # Einstellungen und Alarmregeln, im Container nur lesbar (:ro).
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      # Die gesammelten Zeitreihen überleben einen Neustart.
+      - prometheus_data:/prometheus
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.3.1
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      # Ohne Anmeldung, mit Bearbeitungsrechten. Vertretbar nur deshalb,
+      # weil Grafana ausschließlich auf 127.0.0.1 lauscht.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Editor
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/vulnscout.json
+    volumes:
+      - ./monitoring/grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+      - ./monitoring/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./monitoring/grafana/vulnscout.json:/var/lib/grafana/dashboards/vulnscout.json:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
 
 volumes:
   vulnscout_data:
+  prometheus_data:
+  grafana_data:
