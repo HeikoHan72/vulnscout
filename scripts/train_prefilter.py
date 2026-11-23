@@ -102,8 +102,29 @@ REGISTERED_MODEL_NAME = "vulnscout-prefilter"
 # Schwachstellen verwirft, ist schlimmer als gar kein Pre-Filter.
 MAX_ERROR_RATE = 0.02
 
+# Verwerfen und Bestätigen sind nicht gleich riskant.
+#
+# Ein zu Unrecht bestätigter Fund landet im Bericht und fällt beim Lesen auf.
+# Ein zu Unrecht verworfener Fund verschwindet dagegen lautlos - eine echte
+# Schwachstelle, die niemand mehr sieht. Deshalb werden beide Schwellen
+# getrennt gesucht und an die Verwerfungsseite ein strengerer Maßstab gelegt:
+#
+#   MAX_MISS_RATE_VAL   Anteil echter Funde unter den automatisch verworfenen,
+#                       der bei der Schwellenwahl auf dem Validierungsanteil
+#                       erlaubt ist. 0.0 = kein einziger.
+#   MAX_MISS_RATE_TEST  Dieselbe Quote auf den ausgehaltenen Testrepos, als
+#                       Teil des Qualitäts-Gates.
+MAX_MISS_RATE_VAL = 0.0
+MAX_MISS_RATE_TEST = 0.02
+
 # Kandidaten-Schwellen für die Suche auf dem Validierungsanteil.
-THRESHOLD_CANDIDATES = [0.80, 0.85, 0.90, 0.92, 0.95, 0.97, 0.99]
+THRESHOLD_HIGH_CANDIDATES = [0.80, 0.85, 0.90, 0.92, 0.95, 0.97, 0.99]
+
+# NEVER_REJECT schaltet das automatische Verwerfen komplett ab (keine
+# Wahrscheinlichkeit ist <= -1.0). Bleibt als sicherste Option immer wählbar,
+# falls keine Verwerfungsschwelle den Maßstab oben einhält.
+NEVER_REJECT = -1.0
+THRESHOLD_LOW_CANDIDATES = [0.20, 0.15, 0.10, 0.05, 0.02, 0.01, NEVER_REJECT]
 
 
 @dataclass
@@ -122,6 +143,10 @@ class CandidateResult:
     passes_gate: bool
     n_auto_decided_test: int = 0
     n_errors_test: int = 0
+    # Verwerfungsseite getrennt ausgewiesen, siehe MAX_MISS_RATE_TEST.
+    test_miss_rate: float = 0.0
+    n_rejected_test: int = 0
+    n_missed_test: int = 0
 
 
 def load_dataset() -> pd.DataFrame:
@@ -176,18 +201,69 @@ def _coverage_and_error(decisions: np.ndarray, y_true: np.ndarray) -> tuple[floa
     return coverage, error_rate, n_decided, n_errors
 
 
-def pick_thresholds(proba_val: np.ndarray, y_val: np.ndarray) -> tuple[float, float]:
-    """Sucht das Schwellenpaar mit maximaler Abdeckung, das MAX_ERROR_RATE einhält."""
-    best = (0.99, 0.01)
-    best_coverage = -1.0
-    for t_high in THRESHOLD_CANDIDATES:
-        t_low = 1 - t_high
-        coverage, error_rate, _, _ = _coverage_and_error(
-            _decide(proba_val, t_high, t_low), y_val
-        )
-        if error_rate <= MAX_ERROR_RATE and coverage > best_coverage:
-            best = (t_high, t_low)
-            best_coverage = coverage
+def _decidable(df: pd.DataFrame) -> np.ndarray:
+    """Welche Funde der Pre-Filter überhaupt selbst entscheiden darf.
+
+    Funde ohne Scanner-Schweregrad (praktisch alle pip-audit-Funde) gehen zur
+    Laufzeit immer an die LLM-Triage, weil nur sie den Schweregrad bestimmen
+    kann - siehe `src/prefilter/prefilter.py`. Dieselbe Regel muss hier
+    gelten, sonst meldet das Training eine Abdeckung, die im Betrieb nie
+    erreicht wird (training/serving skew).
+    """
+    return (df["scanner_severity"].astype(str).str.lower() != "unknown").to_numpy()
+
+
+def _decide_with_rule(
+    proba: np.ndarray, t_high: float, t_low: float, decidable: np.ndarray
+) -> np.ndarray:
+    """`_decide`, aber Funde ohne Schweregrad bleiben immer unentschieden."""
+    decisions = _decide(proba, t_high, t_low)
+    decisions[~decidable] = None
+    return decisions
+
+
+def _miss_stats(decisions: np.ndarray, y_true: np.ndarray) -> tuple[float, int, int]:
+    """Kennzahlen der Verwerfungsseite.
+
+    Gibt (Quote, Anzahl verworfener Funde, Anzahl übersehener echter Funde)
+    zurück. "Übersehen" heißt: automatisch verworfen, obwohl das Label den
+    Fund als echte Schwachstelle ausweist. Ohne Verwerfungen ist die Quote
+    0.0 - nichts verworfen, nichts übersehen.
+    """
+    rejected_mask = decisions == False  # noqa: E712 - object-Array, kein pandas
+    n_rejected = int(rejected_mask.sum())
+    if n_rejected == 0:
+        return 0.0, 0, 0
+    n_missed = int(y_true[rejected_mask].astype(bool).sum())
+    return n_missed / n_rejected, n_rejected, n_missed
+
+
+def pick_thresholds(
+    proba_val: np.ndarray, y_val: np.ndarray, decidable_val: np.ndarray
+) -> tuple[float, float]:
+    """Sucht das Schwellenpaar mit maximaler Abdeckung unter zwei Auflagen.
+
+    Beide Schwellen werden unabhängig voneinander gesucht (früher galt starr
+    `t_low = 1 - t_high`). Zulässig ist ein Paar nur, wenn es die
+    Gesamtfehlerquote MAX_ERROR_RATE einhält *und* auf der Verwerfungsseite
+    höchstens MAX_MISS_RATE_VAL echte Funde übersieht.
+
+    Bei gleicher Abdeckung gewinnt die vorsichtigere, also niedrigere
+    Verwerfungsschwelle.
+    """
+    best = (0.99, NEVER_REJECT)
+    best_key = (-1.0, -float("inf"))
+    for t_high in THRESHOLD_HIGH_CANDIDATES:
+        for t_low in THRESHOLD_LOW_CANDIDATES:
+            decisions = _decide_with_rule(proba_val, t_high, t_low, decidable_val)
+            coverage, error_rate, _, _ = _coverage_and_error(decisions, y_val)
+            miss_rate, _, _ = _miss_stats(decisions, y_val)
+            if error_rate > MAX_ERROR_RATE or miss_rate > MAX_MISS_RATE_VAL:
+                continue
+            key = (coverage, -t_low)
+            if key > best_key:
+                best = (t_high, t_low)
+                best_key = key
     return best
 
 
@@ -203,7 +279,11 @@ class PrefilterModel(mlflow.pyfunc.PythonModel):
 
     def predict(self, context, model_input: pd.DataFrame) -> pd.DataFrame:
         proba = self.pipeline.predict_proba(model_input)[:, 1]
-        decisions = _decide(proba, self.threshold_high, self.threshold_low)
+        # Die Schweregrad-Regel steckt im Modellartefakt selbst, nicht nur im
+        # Aufrufer: So gilt sie für jeden, der dieses Modell lädt.
+        decisions = _decide_with_rule(
+            proba, self.threshold_high, self.threshold_low, _decidable(model_input)
+        )
         decision_str = np.where(
             decisions == True,  # noqa: E712
             "true_positive",
@@ -229,9 +309,10 @@ def evaluate_candidate(
     pipeline.fit(X_train, y_train)
 
     proba_val = pipeline.predict_proba(X_val)[:, 1]
-    threshold_high, threshold_low = pick_thresholds(proba_val, y_val)
+    decidable_val = _decidable(X_val)
+    threshold_high, threshold_low = pick_thresholds(proba_val, y_val, decidable_val)
     val_coverage, val_error_rate, _, _ = _coverage_and_error(
-        _decide(proba_val, threshold_high, threshold_low), y_val
+        _decide_with_rule(proba_val, threshold_high, threshold_low, decidable_val), y_val
     )
 
     # Für die finale Metrik auf einem Datensatz nachtrainieren, der die
@@ -241,7 +322,9 @@ def evaluate_candidate(
 
     y_test = df_test[TARGET].to_numpy()
     proba_test = pipeline.predict_proba(df_test)[:, 1]
-    test_decisions = _decide(proba_test, threshold_high, threshold_low)
+    test_decisions = _decide_with_rule(
+        proba_test, threshold_high, threshold_low, _decidable(df_test)
+    )
     test_coverage, test_error_rate, n_decided, n_errors = _coverage_and_error(
         test_decisions, y_test
     )
@@ -251,7 +334,13 @@ def evaluate_candidate(
     recall = recall_score(y_test, y_pred_test, zero_division=0)
     f1 = f1_score(y_test, y_pred_test, zero_division=0)
 
-    passes_gate = test_error_rate <= MAX_ERROR_RATE and n_decided > 0
+    test_miss_rate, n_rejected, n_missed = _miss_stats(test_decisions, y_test)
+
+    passes_gate = (
+        test_error_rate <= MAX_ERROR_RATE
+        and test_miss_rate <= MAX_MISS_RATE_TEST
+        and n_decided > 0
+    )
 
     return CandidateResult(
         name=name,
@@ -268,6 +357,9 @@ def evaluate_candidate(
         passes_gate=passes_gate,
         n_auto_decided_test=n_decided,
         n_errors_test=n_errors,
+        test_miss_rate=test_miss_rate,
+        n_rejected_test=n_rejected,
+        n_missed_test=n_missed,
     )
 
 
@@ -293,6 +385,9 @@ def log_candidate_to_mlflow(result: CandidateResult, df_train: pd.DataFrame, df_
         mlflow.log_metric("test_f1", result.test_f1)
         mlflow.log_metric("n_auto_decided_test", result.n_auto_decided_test)
         mlflow.log_metric("n_errors_test", result.n_errors_test)
+        mlflow.log_metric("test_miss_rate", result.test_miss_rate)
+        mlflow.log_metric("n_rejected_test", result.n_rejected_test)
+        mlflow.log_metric("n_missed_test", result.n_missed_test)
         mlflow.log_metric("passes_quality_gate", int(result.passes_gate))
 
         wrapped = PrefilterModel(result.pipeline, result.threshold_high, result.threshold_low)
@@ -344,19 +439,31 @@ def main() -> None:
     # (still best-effort abgefangen, aber eben nutzlos - training/serving skew).
     sample_input = df_train[CATEGORICAL_FEATURES + NUMERIC_FEATURES].head(3)
 
+    # Merkt sich die Version, die *dieser* Lauf für jeden Kandidaten erzeugt
+    # hat. Entscheidend: Die Aliase dürfen nur auf diese Versionen gesetzt
+    # werden, nicht auf irgendwelche älteren aus früheren Läufen.
+    versions_by_candidate: dict[str, str] = {}
+
     for name, model in candidates.items():
         logger.info("Trainiere Kandidat: %s", name)
         result = evaluate_candidate(name, model, df_train, df_test)
         logger.info(
-            "%s: Test-Abdeckung=%.1f%%, Test-Fehlerrate=%.2f%%, Gate=%s",
+            "%s: Test-Abdeckung=%.1f%%, Test-Fehlerrate=%.2f%%, "
+            "verworfen=%d davon uebersehen=%d (%.2f%%), Schwellen=%.2f/%s, Gate=%s",
             name,
             result.test_coverage * 100,
             result.test_error_rate * 100,
+            result.n_rejected_test,
+            result.n_missed_test,
+            result.test_miss_rate * 100,
+            result.threshold_high,
+            "aus" if result.threshold_low == NEVER_REJECT else f"{result.threshold_low:.2f}",
             "bestanden" if result.passes_gate else "NICHT bestanden",
         )
-        version = log_candidate_to_mlflow(result, df_train, df_test, sample_input)
+        versions_by_candidate[name] = log_candidate_to_mlflow(
+            result, df_train, df_test, sample_input
+        )
         results.append(result)
-        result_version = version
 
     client = MlflowClient()
 
@@ -370,26 +477,25 @@ def main() -> None:
         return
 
     champion = max(eligible, key=lambda r: r.test_coverage)
+
+    # Aliase ausschließlich auf die Versionen dieses Laufs setzen.
+    #
+    # Frühere Fassung lief über alle jemals registrierten Versionen und setzte
+    # den Alias für jede passende - die letzte Zuweisung gewann. Ab dem zweiten
+    # Trainingslauf konnte der Champion-Alias dadurch auf ein veraltetes Modell
+    # zeigen, das die Anwendung dann still weiterbenutzt hätte.
+    champion_version = versions_by_candidate[champion.name]
+    client.set_registered_model_alias(REGISTERED_MODEL_NAME, "champion", champion_version)
+    logger.info("Champion: %s (Version %s)", champion.name, champion_version)
+
     others = [r for r in results if r is not champion]
-
-    # Versionsnummern erneut abfragen (log_candidate_to_mlflow gibt sie pro
-    # Aufruf zurück, hier nur zur Klarheit erneut über die Registry holen).
-    all_versions = client.search_model_versions(f"name='{REGISTERED_MODEL_NAME}'")
-    versions_by_run = {v.run_id: v.version for v in all_versions}
-
-    runs = mlflow.search_runs(
-        experiment_names=[EXPERIMENT_NAME], output_format="list"
-    )
-    name_by_run_id = {r.info.run_id: r.data.params.get("candidate") for r in runs}
-
-    for run_id, version in versions_by_run.items():
-        candidate_name = name_by_run_id.get(run_id)
-        if candidate_name == champion.name:
-            client.set_registered_model_alias(REGISTERED_MODEL_NAME, "champion", version)
-            logger.info("Champion: %s (Version %s)", candidate_name, version)
-        elif candidate_name in {r.name for r in others}:
-            client.set_registered_model_alias(REGISTERED_MODEL_NAME, "challenger", version)
-            logger.info("Challenger: %s (Version %s)", candidate_name, version)
+    if others:
+        challenger = max(others, key=lambda r: r.test_coverage)
+        challenger_version = versions_by_candidate[challenger.name]
+        client.set_registered_model_alias(
+            REGISTERED_MODEL_NAME, "challenger", challenger_version
+        )
+        logger.info("Challenger: %s (Version %s)", challenger.name, challenger_version)
 
     summary = {
         "champion": champion.name,
@@ -397,6 +503,9 @@ def main() -> None:
         "threshold_low": champion.threshold_low,
         "test_coverage": champion.test_coverage,
         "test_error_rate": champion.test_error_rate,
+        "test_miss_rate": champion.test_miss_rate,
+        "n_rejected_test": champion.n_rejected_test,
+        "n_missed_test": champion.n_missed_test,
         "test_precision": champion.test_precision,
         "test_recall": champion.test_recall,
         "test_f1": champion.test_f1,

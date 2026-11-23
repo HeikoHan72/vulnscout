@@ -23,12 +23,14 @@ def _value(metric, **labels) -> float:
     return float(collected)
 
 
-def _finding(finding_id: str, rule_id: str = "B000") -> Finding:
+def _finding(
+    finding_id: str, rule_id: str = "B000", severity: Severity = Severity.MEDIUM
+) -> Finding:
     return Finding(
         id=finding_id,
         tool=ToolName.BANDIT,
         rule_id=rule_id,
-        severity=Severity.MEDIUM,
+        severity=severity,
         file_path="x.py",
         line_start=1,
         title="Testfund",
@@ -125,3 +127,36 @@ def test_metriken_werden_fuer_entschiedene_und_eskalierte_funde_gezaehlt():
     assert _value(m.PREFILTER_DECISIONS, result="auto_rejected") == before_rejected + 1
     assert _value(m.PREFILTER_DECISIONS, result="escalated") == before_escalated + 1
     assert _value(m.PREFILTER_SKIPPED_LLM_CALLS) == before_skipped + 2
+
+
+def test_fund_ohne_scanner_schweregrad_geht_immer_ans_llm():
+    """Ohne Schweregrad darf der Pre-Filter nicht selbst entscheiden.
+
+    Hintergrund: pip-audit liefert keinen Schweregrad (siehe
+    `_parse_pip_audit`), diesen bestimmt erst die LLM-Triage. Bestätigt der
+    Pre-Filter solche Funde automatisch, landen sie ohne Einstufung im
+    Bericht - die Kostenersparnis ginge zulasten der Aussagekraft.
+    """
+    findings = [
+        _finding("mit_schweregrad", severity=Severity.HIGH),
+        _finding("ohne_schweregrad", severity=Severity.UNKNOWN),
+    ]
+    # Das Modell wäre sich bei beiden sicher - die Regel muss trotzdem greifen.
+    fake_model = _FakeModel([("true_positive", 0.99), ("true_positive", 0.99)])
+
+    with patch("src.prefilter.prefilter._load_model", return_value=fake_model):
+        for_llm, assessments = apply_prefilter(findings)
+
+    assert [f.id for f in for_llm] == ["ohne_schweregrad"]
+    assert [a.finding_id for a in assessments] == ["mit_schweregrad"]
+
+
+def test_eskalation_ohne_schweregrad_wird_getrennt_gezaehlt():
+    vorher = _value(m.PREFILTER_DECISIONS, result="escalated_no_severity")
+    findings = [_finding("ohne_schweregrad", severity=Severity.UNKNOWN)]
+    fake_model = _FakeModel([("true_positive", 0.99)])
+
+    with patch("src.prefilter.prefilter._load_model", return_value=fake_model):
+        apply_prefilter(findings)
+
+    assert _value(m.PREFILTER_DECISIONS, result="escalated_no_severity") == vorher + 1

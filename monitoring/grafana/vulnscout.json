@@ -8,7 +8,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 41,
-  "version": 4,
+  "version": 5,
   "refresh": "5s",
   "time": {
     "from": "now-30m",
@@ -301,7 +301,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (tool) (increase(vulnscout_findings_total[5m]))",
+          "expr": "sum by (tool) (vulnscout_findings_total)",
           "legendFormat": "{{tool}}"
         }
       ],
@@ -333,7 +333,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (tool) (increase(vulnscout_scanner_errors_total[5m]))",
+          "expr": "sum by (tool) (vulnscout_scanner_errors_total) or vector(0)",
           "legendFormat": "{{tool}}"
         }
       ],
@@ -365,7 +365,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (result) (increase(vulnscout_triage_results_total[5m]))",
+          "expr": "sum by (result) (vulnscout_triage_results_total)",
           "legendFormat": "{{result}}"
         }
       ],
@@ -397,7 +397,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (severity) (increase(vulnscout_confirmed_findings_total[5m]))",
+          "expr": "sum by (severity) (vulnscout_confirmed_findings_total)",
           "legendFormat": "{{severity}}"
         }
       ],
@@ -511,7 +511,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (result) (increase(vulnscout_prefilter_decisions_total[5m]))",
+          "expr": "sum by (result) (vulnscout_prefilter_decisions_total)",
           "legendFormat": "{{result}}"
         }
       ],
@@ -556,7 +556,7 @@
     {
       "id": 17,
       "type": "stat",
-      "title": "Pre-Filter-Abdeckung (1h)",
+      "title": "Pre-Filter-Abdeckung (gesamt)",
       "description": "Anteil der Funde der letzten Stunde, die ohne LLM-Aufruf entschieden wurden",
       "datasource": {
         "type": "prometheus",
@@ -575,7 +575,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "100 * sum(increase(vulnscout_prefilter_decisions_total{result=~\"auto_confirmed|auto_rejected\"}[1h])) / sum(increase(vulnscout_prefilter_decisions_total[1h])) or vector(0)",
+          "expr": "100 * sum(vulnscout_prefilter_decisions_total{result=~\"auto_confirmed|auto_rejected\"}) / sum(vulnscout_prefilter_decisions_total)",
           "legendFormat": "Abdeckung %"
         }
       ],

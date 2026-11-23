@@ -103,9 +103,22 @@ def apply_prefilter(
     findings_for_llm: list[Finding] = []
     assessments: list[TriageAssessment] = []
 
+    n_ohne_schweregrad = 0
+
     for finding, (_, row) in zip(findings, predictions.iterrows()):
         decision = row["decision"]
         probability = float(row["probability_true_positive"])
+
+        # Funde ohne Schweregrad des Scanners (praktisch alle pip-audit-Funde,
+        # siehe _parse_pip_audit) gehen immer ans LLM, auch wenn das Modell
+        # sicher ist. Begründung: Der Pre-Filter entscheidet nur "echt oder
+        # Fehlalarm", den Schweregrad kann er nicht bestimmen. Würde er solche
+        # Funde automatisch bestätigen, stünden sie ohne Einstufung im Bericht -
+        # die Kostenersparnis ginge zulasten der Aussagekraft.
+        if finding.severity == Severity.UNKNOWN:
+            findings_for_llm.append(finding)
+            n_ohne_schweregrad += 1
+            continue
 
         if decision == "escalate":
             findings_for_llm.append(finding)
@@ -138,8 +151,16 @@ def apply_prefilter(
             if rejected:
                 m.PREFILTER_DECISIONS.labels(result="auto_rejected").inc(rejected)
             m.PREFILTER_SKIPPED_LLM_CALLS.inc(len(assessments))
-        if findings_for_llm:
-            m.PREFILTER_DECISIONS.labels(result="escalated").inc(len(findings_for_llm))
+        # Getrennt ausgewiesen, weil es zwei verschiedene Gründe sind:
+        # "escalated" = Modell war unsicher, "escalated_no_severity" = Fund
+        # ohne Scanner-Schweregrad, der grundsätzlich ans LLM geht.
+        if n_ohne_schweregrad:
+            m.PREFILTER_DECISIONS.labels(result="escalated_no_severity").inc(
+                n_ohne_schweregrad
+            )
+        n_unsicher = len(findings_for_llm) - n_ohne_schweregrad
+        if n_unsicher:
+            m.PREFILTER_DECISIONS.labels(result="escalated").inc(n_unsicher)
     except Exception:  # noqa: BLE001 - Monitoring darf nie durchschlagen
         logger.exception("Pre-Filter-Metriken konnten nicht geschrieben werden")
 
