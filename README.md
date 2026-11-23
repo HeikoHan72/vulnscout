@@ -109,7 +109,7 @@ Zusätzlich wurden 6 Repositories (die vier oben plus `requests` und `click`) vo
 
 ## Limitations
 
-- **Scanner-Abdeckung ist unvollständig:** Von 17 bekannten Schwachstellen im Ground-Truth-Repo haben Bandit und Semgrep (Regelwerk `p/security-audit`) 3 nie gemeldet – Path Traversal, SSRF und ein hartcodiertes Secret in der Config. Die LLM-Triage bewertet nur, was mindestens ein Scanner findet; sie meldet nichts selbst.
+- **Scanner-Abdeckung ist unvollständig:** Von 17 bekannten Schwachstellen im Ground-Truth-Repo haben Bandit und Semgrep (Regelwerk `p/security-audit`) 3 nie gemeldet – Path Traversal, SSRF und ein hartcodiertes Secret in der Config. Die LLM-Triage bewertet nur, was mindestens ein Scanner findet; sie meldet nichts selbst. **Ursache:** Beide Scanner arbeiten musterbasiert, nicht mit Datenfluss-/Taint-Analyse – SSRF und Path Traversal erfordern aber, Benutzereingaben über mehrere Zeilen bis zum gefährlichen Aufruf zu verfolgen. **Mögliche Abhilfe (nicht umgesetzt, Zeitrahmen des Projekts):** breiteres Semgrep-Regelwerk (z. B. `p/owasp-top-ten`) oder ein Tool mit echter Taint-Analyse (Semgrep Pro, CodeQL) ergänzen.
 - **LLM-Triage ist nicht fehlerfrei:** 3 von 8 bewusst mehrdeutigen Fällen (z. B. harmloses `shell=True` ohne Benutzereingabe) wurden fälschlich als echte Schwachstelle bestätigt – daher 91,9 % statt 100 % Precision bei Code-Funden.
 - **Pre-Filter-Modell ist Distillation, keine unabhängige Verifikation:** Es lernt, die LLM-Bewertung vorherzusagen, nicht die Wahrheit selbst. Ein systematischer Fehler der LLM-Triage würde vom Pre-Filter übernommen statt korrigiert.
 - **Trainingsdatensatz für den Pre-Filter ist klein und Python-only:** 3.004 Funde aus 6 Repositories, ausschließlich Python. Für andere Sprachen oder stark abweichende Codebasen ist keine Aussage über die Pre-Filter-Qualität möglich.
@@ -117,7 +117,7 @@ Zusätzlich wurden 6 Repositories (die vier oben plus `requests` und `click`) vo
 - **Kein asynchrones Scanning:** `POST /scans` läuft synchron, ein Scan pro Request.
 - **Bekannte API-Einschränkung:** Bei Fehlschlag von `POST /scans` fehlt die Lauf-ID in der Fehlerantwort.
 
-*English summary: scanner coverage is incomplete (3 of 17 known vulnerabilities were never flagged by Bandit/Semgrep); LLM triage misclassified 3 of 8 deliberately ambiguous cases (91.9% precision on code findings); the pre-filter model is a distillation of LLM judgment, not independent ground truth, so it inherits any systematic LLM bias; its training data (3,004 findings, 6 repos) is Python-only; no Alertmanager wiring; scanning is synchronous; a failed `POST /scans` doesn't return a run id.*
+*English summary: scanner coverage is incomplete (3 of 17 known vulnerabilities were never flagged by Bandit/Semgrep, because both are pattern-based rather than taint-analysis tools; a broader ruleset or a taint-analysis tool such as Semgrep Pro or CodeQL would address this but was out of scope given the project timeline); LLM triage misclassified 3 of 8 deliberately ambiguous cases (91.9% precision on code findings); the pre-filter model is a distillation of LLM judgment, not independent ground truth, so it inherits any systematic LLM bias; its training data (3,004 findings, 6 repos) is Python-only; no Alertmanager wiring; scanning is synchronous; a failed `POST /scans` doesn't return a run id.*
 
 ## KI-Einsatz / AI usage
 
