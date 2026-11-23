@@ -125,6 +125,11 @@ prettytable==3.19.0
 prometheus_client==0.26.0
 propcache==0.5.4
 protobuf==6.33.6
+# psutil gehört zur Umgebung, in der das Pre-Filter-Modell trainiert wird, und
+# wird deshalb von MLflow als Modell-Abhängigkeit mitgeschrieben. Ohne diesen
+# Eintrag meldet der Container beim Laden des Modells eine Abweichung zwischen
+# Trainings- und Laufzeitumgebung.
+psutil==7.2.2
 py-serializable==2.2.0
 pyarrow==26.0.1
 pyasn1==0.6.5

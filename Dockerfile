@@ -15,7 +15,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ src/
 COPY test_repos/ test_repos/
 
-RUN mkdir -p /app/data \
+# /app/mlflow wird hier angelegt, damit das gleichnamige Docker-Volume die
+# Rechte dieses Verzeichnisses übernimmt. Ohne diesen Schritt gehört das
+# Volume root und der nicht-privilegierte appuser kann nicht hineinschreiben.
+RUN mkdir -p /app/data /app/mlflow \
     && useradd --create-home --shell /bin/bash appuser \
     && chown -R appuser:appuser /app
 

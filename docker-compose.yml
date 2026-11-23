@@ -1,5 +1,6 @@
 # Startet den vollständigen VulnScout-Stack mit einem Befehl:
 #   api         - die Scan-API (Bandit, pip-audit, Semgrep, LLM-Triage, Bericht)
+#   mlflow      - Tracking-Server und Model Registry (liefert das Pre-Filter-Modell)
 #   prometheus  - sammelt die Kennzahlen der API über /metrics
 #   grafana     - zeigt die Kennzahlen als Dashboard
 #
@@ -12,14 +13,57 @@
 services:
   api:
     build: .
+    image: vulnscout:local
     ports:
       - "127.0.0.1:8000:8000"
     env_file:
       - .env
     environment:
       - VULNSCOUT_DB_PATH=/app/data/vulnscout.db
+      # Überschreibt bewusst einen etwaigen Wert aus .env: Innerhalb des
+      # Containers zeigt "localhost" auf den Container selbst, nicht auf den
+      # Host. Der Tracking-Server ist hier nur unter seinem Dienstnamen
+      # erreichbar. Ohne diese Zeile findet der Pre-Filter kein Modell und
+      # fällt still auf "alles an die LLM-Triage" zurück.
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
     volumes:
       - vulnscout_data:/app/data
+    depends_on:
+      - mlflow
+    restart: unless-stopped
+
+  mlflow:
+    # Nutzt dasselbe Image wie die API, damit Server und Anwendung garantiert
+    # dieselbe MLflow-Version verwenden (gepinnt in requirements.txt).
+    #
+    # --allowed-hosts ist zwingend: MLflow prüft den Host-Header gegen eine
+    # Positivliste (Schutz gegen DNS-Rebinding) und erlaubt standardmäßig nur
+    # localhost und private IP-Bereiche. Der Dienstname "mlflow:5000", unter
+    # dem der API-Container den Server anspricht, fällt nicht darunter und
+    # würde mit HTTP 403 abgelehnt - der Pre-Filter liefe dann still ins Leere.
+    image: vulnscout:local
+    build: .
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////app/mlflow/mlflow.db
+      --artifacts-destination /app/mlflow/artifacts
+      --serve-artifacts
+      --allowed-hosts mlflow:5000,localhost:5000,127.0.0.1:5000
+    ports:
+      # Veröffentlicht, damit Training und MLflow-UI vom Host aus erreichbar
+      # sind: http://localhost:5000
+      - "127.0.0.1:5000:5000"
+    volumes:
+      - mlflow_data:/app/mlflow
+    # Überschreibt den HEALTHCHECK aus dem Dockerfile, der die API auf Port
+    # 8000 prüft - hier läuft stattdessen der Tracking-Server auf Port 5000.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
     restart: unless-stopped
 
   prometheus:
@@ -57,5 +101,6 @@ services:
 
 volumes:
   vulnscout_data:
+  mlflow_data:
   prometheus_data:
   grafana_data:
