@@ -62,7 +62,9 @@ Nicht jeder Scanner-Fund braucht einen LLM-Aufruf: Ein von pip-audit gemeldetes 
 
 **Wichtig, offen benannt:** Die Trainingslabels stammen vom Triage-Agenten (LLM) selbst, nicht von menschlicher Ground Truth – das Modell destilliert also das LLM-Urteil, es lernt nicht unabhängig "echte" Schwachstellen zu erkennen. Die unten berichtete Fehlerrate ist eine Abweichung vom LLM-Urteil, keine Abweichung von der Wahrheit.
 
-Trainiert auf 3004 realen Scanner-Funden aus 6 Repositories (3 bewusst verwundbare: eigenes Dummy-Repo, OWASP PyGoat, DVPWA; 3 saubere Open-Source-Bibliotheken als Negativbeispiele: Vulnerable-Flask-App, `requests`, `click`). `Vulnerable-Flask-App` und `click` wurden beim Training nie gesehen (repo-weiser Split, Testdaten).
+Trainiert auf 3004 realen Scanner-Funden aus 6 Repositories (4 bewusst verwundbare: eigenes Dummy-Repo, OWASP PyGoat, Vulnerable Flask App, DVPWA; 2 saubere Open-Source-Bibliotheken als Negativbeispiele: `requests`, `click`). `Vulnerable-Flask-App` und `click` wurden beim Training nie gesehen (repo-weiser Split, Testdaten).
+
+Der Trainingsdatensatz (`scripts/training_data.jsonl`) ist per [DVC](https://dvc.org) versioniert statt direkt in Git – nur die Metadatei (`scripts/training_data.jsonl.dvc`) liegt im Repo. Der DVC-Remote ist aktuell ein lokaler Ordner auf der Entwicklungsmaschine; Dritte, die den Pre-Filter neu trainieren wollen, brauchen die Rohdaten separat (`dvc pull` funktioniert nur mit Zugriff auf diesen Remote). Zum reinen Ausführen von VulnScout wird die Datei nicht gebraucht – nur zum Nachtrainieren des Pre-Filter-Modells.
 
 | Kennzahl | Wert |
 |---|---|
@@ -83,6 +85,7 @@ Trainiert auf 3004 realen Scanner-Funden aus 6 Repositories (3 bewusst verwundba
 - Pre-Filter-Modell: scikit-learn (Logistic Regression / Random Forest), MLflow Model Registry (Champion/Challenger)
 - API: FastAPI
 - Tracking: MLflow (Experiment-Tracking + Model Registry)
+- Datenversionierung: DVC (Trainingsdatensatz des Pre-Filter-Modells)
 - Monitoring: Prometheus, Grafana
 - Container: Docker, Docker Compose
 - CI: GitHub Actions, pytest (inkl. Qualitäts-Gate für das Pre-Filter-Modell)
@@ -113,6 +116,7 @@ Zusätzlich wurden 6 Repositories (die vier oben plus `requests` und `click`) vo
 - **LLM-Triage ist nicht fehlerfrei:** 3 von 8 bewusst mehrdeutigen Fällen (z. B. harmloses `shell=True` ohne Benutzereingabe) wurden fälschlich als echte Schwachstelle bestätigt – daher 91,9 % statt 100 % Precision bei Code-Funden.
 - **Pre-Filter-Modell ist Distillation, keine unabhängige Verifikation:** Es lernt, die LLM-Bewertung vorherzusagen, nicht die Wahrheit selbst. Ein systematischer Fehler der LLM-Triage würde vom Pre-Filter übernommen statt korrigiert.
 - **Trainingsdatensatz für den Pre-Filter ist klein und Python-only:** 3.004 Funde aus 6 Repositories, ausschließlich Python. Für andere Sprachen oder stark abweichende Codebasen ist keine Aussage über die Pre-Filter-Qualität möglich.
+- **DVC-Remote ist lokal, nicht öffentlich erreichbar:** Der Trainingsdatensatz des Pre-Filter-Modells liegt per DVC versioniert in einem lokalen Ordner außerhalb des Repos. Wer das Repository klont, kann den Pre-Filter nutzen (Modell liegt in der MLflow Registry), aber nicht ohne Weiteres neu trainieren – dafür bräuchte es einen öffentlichen Remote (z. B. S3/GCS), was im Projektrahmen nicht umgesetzt wurde.
 - **Kein Alertmanager:** Die 7 Prometheus-Alarmregeln werden ausgewertet, aber nicht versendet – nur in der Prometheus-Oberfläche sichtbar.
 - **Kein asynchrones Scanning:** `POST /scans` läuft synchron, ein Scan pro Request.
 - **Bekannte API-Einschränkung:** Bei Fehlschlag von `POST /scans` fehlt die Lauf-ID in der Fehlerantwort.
