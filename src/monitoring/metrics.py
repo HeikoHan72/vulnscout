@@ -116,3 +116,23 @@ LLM_LATENCY = Histogram(
     "Antwortzeit eines einzelnen LLM-Aufrufs in Sekunden",
     buckets=[0.5, 1, 2, 5, 10, 20, 30, 60, 120],
 )
+
+# --- Pre-Filter: wie viele Funde ohne LLM-Aufruf entschieden werden ---------
+#
+# Das Pre-Filter-Modell (siehe scripts/train_prefilter.py) entscheidet einen
+# Teil der Funde selbst (true_positive/false_positive) und eskaliert den
+# Rest ans LLM, wenn es sich nicht sicher genug ist. "escalated" zählt also
+# weiterhin ganz normal in LLM_REQUESTS oben; diese Metrik misst nur, wie
+# viel Arbeit dem LLM dadurch abgenommen wird - die Kennzahl für die
+# Kostenersparnis.
+
+PREFILTER_DECISIONS = Counter(
+    "vulnscout_prefilter_decisions_total",
+    "Entscheidungen des Pre-Filter-Modells vor der LLM-Triage",
+    ["result"],  # auto_confirmed, auto_rejected, escalated, unavailable
+)
+
+PREFILTER_SKIPPED_LLM_CALLS = Counter(
+    "vulnscout_prefilter_skipped_llm_calls_total",
+    "Geschätzte Anzahl eingesparter LLM-Aufrufe durch das Pre-Filter-Modell",
+)

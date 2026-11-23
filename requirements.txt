@@ -6,7 +6,11 @@
 #   anthropic             – LLM-Zugriff (Triage- und Report-Agent)
 #   bandit, pip-audit,
 #   semgrep               – die drei Sicherheitsscanner
-#   mlflow                – Experiment-Tracking
+#   mlflow                – Experiment-Tracking + Model Registry (Pre-Filter)
+#   scikit-learn, pandas  – Pre-Filter-Modell (Training, siehe
+#                           scripts/train_prefilter.py) - ursprünglich nur
+#                           transitiv über mlflow vorhanden, seit Variante B
+#                           ein direkter, aktiv genutzter Bestandteil
 #   prometheus-client     – Kennzahlen für das Monitoring (/metrics)
 #   pytest                – Tests
 #   python-dotenv         – .env-Datei laden

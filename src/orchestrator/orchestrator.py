@@ -14,6 +14,7 @@ import anthropic
 
 from src.demo.fixtures import fixture_report, fixture_triage
 from src.monitoring.record import record_run
+from src.prefilter.prefilter import apply_prefilter
 from src.report_agent.report import build_report_context, generate_report
 from src.scanner_agent.scanner import run_all_scanners
 from src.tracking.mlflow_tracking import log_run
@@ -84,7 +85,16 @@ def run_pipeline(
         if demo_mode:
             assessments = fixture_triage(scan_result.findings)
         else:
-            assessments = triage_findings(scan_result.findings, client=client)
+            # Pre-Filter zuerst: eindeutige Fälle werden ohne LLM-Aufruf
+            # entschieden (siehe src/prefilter/prefilter.py), der Rest geht
+            # wie bisher an die LLM-Triage. Ist kein Pre-Filter-Modell
+            # registriert, kommen hier einfach alle Funde zurück - Verhalten
+            # bleibt dann unverändert zum Stand vor Variante B.
+            findings_for_llm, prefilter_assessments = apply_prefilter(scan_result.findings)
+            llm_assessments = (
+                triage_findings(findings_for_llm, client=client) if findings_for_llm else []
+            )
+            assessments = prefilter_assessments + llm_assessments
         store.save_assessments(run.id, assessments)
         run.status = RunStatus.REPORTING
         run.updated_at = datetime.now(timezone.utc)
