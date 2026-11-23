@@ -8,7 +8,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 41,
-  "version": 2,
+  "version": 3,
   "refresh": "5s",
   "time": {
     "from": "now-30m",
@@ -51,7 +51,7 @@
       "id": 2,
       "type": "stat",
       "title": "Anfragen pro Sekunde",
-      "description": "Ohne /metrics und /health, die ruft Prometheus selbst ab",
+      "description": "Ohne /metrics und /health, die ruft Prometheus selbst ab. Zeigt 0, solange noch keine fachliche Anfrage kam",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -69,7 +69,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(vulnscout_http_requests_total{path!~\"/metrics|/health\"}[1m]))",
+          "expr": "sum(rate(vulnscout_http_requests_total{path!~\"/metrics|/health\"}[1m])) or vector(0)",
           "legendFormat": "gesamt"
         }
       ],
