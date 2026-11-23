@@ -292,7 +292,62 @@ def run_all_scanners(target_dir: Path, semgrep_config: str = "p/security-audit")
         except RuntimeError as exc:
             result.errors[tool_name] = str(exc)
 
+    _ergaenze_code_ausschnitte(result.findings, target_dir)
     return result
+
+
+# Semgrep liefert für Regeln aus der Registry nicht den gefundenen Code,
+# sondern diesen Platzhalter - der echte Ausschnitt ist angemeldeten
+# Nutzern vorbehalten. Für die Triage ist das wertlos: Ohne Code lässt
+# sich nicht beurteilen, woher die verarbeiteten Daten stammen.
+_PLATZHALTER = {"requires login"}
+_KONTEXTZEILEN = 2
+
+
+def _ergaenze_code_ausschnitte(
+    findings: list[Finding], target_dir: Path, kontext: int = _KONTEXTZEILEN
+) -> None:
+    """Füllt fehlende Code-Ausschnitte aus der Quelldatei nach.
+
+    Datei und Zeilennummer liefert jeder Scanner, und das gescannte Repo
+    liegt lokal vor - der Ausschnitt lässt sich also selbst lesen, statt
+    sich auf das Werkzeug zu verlassen. Ändert Funde an Ort und Stelle.
+
+    Bewusst best-effort: Ist eine Datei nicht lesbar, bleibt der Fund
+    unverändert. Ein fehlender Ausschnitt ist ein Qualitätsverlust für
+    die Triage, aber kein Grund, den Scan scheitern zu lassen.
+
+    Funde ohne Codestelle (pip-audit meldet Pakete, keine Zeilen) bleiben
+    unberührt.
+    """
+    zeilen_cache: dict[str, list[str]] = {}
+
+    for finding in findings:
+        vorhanden = (finding.code_snippet or "").strip()
+        if vorhanden and vorhanden.lower() not in _PLATZHALTER:
+            continue
+        if not finding.file_path or not finding.line_start:
+            continue
+
+        try:
+            if finding.file_path not in zeilen_cache:
+                quelle = (target_dir / finding.file_path).read_text(encoding="utf-8")
+                zeilen_cache[finding.file_path] = quelle.splitlines()
+            zeilen = zeilen_cache[finding.file_path]
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.debug("Code-Ausschnitt für %s nicht lesbar: %s", finding.file_path, exc)
+            continue
+
+        von = max(finding.line_start - kontext, 1)
+        bis = min((finding.line_end or finding.line_start) + kontext, len(zeilen))
+        if von > len(zeilen):
+            continue
+
+        # Format mit Zeilennummern wie bei Bandit, damit die Triage für
+        # alle Werkzeuge dieselbe Darstellung sieht.
+        finding.code_snippet = "\n".join(
+            f"{nr:<6}{zeilen[nr - 1]}" for nr in range(von, bis + 1)
+        )
 
 
 if __name__ == "__main__":

@@ -28,7 +28,8 @@ mlflow.db
 *.pdf
 
 # Temporaere Analyse- und Scan-Ausgaben
-scan_result.json
+scan_result*.json
+auswertung*.db
 pip_freeze.txt
 
 # OS

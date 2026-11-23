@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 import src.scanner_agent.scanner as scanner_module
-from src.scanner_agent.models import Severity, ToolName
+from src.scanner_agent.models import Finding, Severity, ToolName
 from src.scanner_agent.scanner import (
     _parse_bandit,
     _parse_pip_audit,
@@ -205,3 +205,75 @@ def test_run_all_scanners_never_raises_and_reports_tool_errors(tmp_path: Path) -
     result = run_all_scanners(tmp_path)
     assert isinstance(result.errors, dict)
     assert isinstance(result.findings, list)
+
+
+# --- Nachgefüllte Code-Ausschnitte -------------------------------------------
+#
+# Hintergrund: Semgrep liefert für Registry-Regeln statt des gefundenen
+# Codes den Text "requires login". In einem echten Lauf betraf das alle
+# 15 Semgrep-Funde - die Triage musste also ohne Code entscheiden. Da
+# Datei und Zeile bekannt sind und das Repo lokal vorliegt, lesen wir den
+# Ausschnitt selbst.
+
+
+def _snippet_finding(
+    code_snippet: str | None,
+    file_path: str = "app.py",
+    line_start: int | None = 19,
+) -> Finding:
+    return Finding(
+        tool=ToolName.SEMGREP,
+        rule_id="r",
+        severity=Severity.HIGH,
+        file_path=file_path,
+        line_start=line_start,
+        code_snippet=code_snippet,
+        title="t",
+        description="d",
+    )
+
+
+def _repo_mit_datei(tmp_path: Path) -> Path:
+    (tmp_path / "app.py").write_text(
+        "\n".join(f"zeile {n}" for n in range(1, 11)) + "\n", encoding="utf-8"
+    )
+    return tmp_path
+
+
+def test_platzhalter_wird_durch_echten_code_ersetzt(tmp_path: Path) -> None:
+    finding = _snippet_finding("requires login", line_start=5)
+    scanner_module._ergaenze_code_ausschnitte([finding], _repo_mit_datei(tmp_path))
+
+    assert finding.code_snippet is not None
+    assert "requires login" not in finding.code_snippet
+    assert "zeile 5" in finding.code_snippet
+    # Kontextzeilen davor und danach sind enthalten.
+    assert "zeile 3" in finding.code_snippet
+    assert "zeile 7" in finding.code_snippet
+
+
+def test_leerer_ausschnitt_wird_gefuellt(tmp_path: Path) -> None:
+    finding = _snippet_finding(None, line_start=1)
+    scanner_module._ergaenze_code_ausschnitte([finding], _repo_mit_datei(tmp_path))
+    assert finding.code_snippet is not None
+    assert "zeile 1" in finding.code_snippet
+
+
+def test_vorhandener_code_bleibt_unveraendert(tmp_path: Path) -> None:
+    finding = _snippet_finding("18    schon vorhanden")
+    scanner_module._ergaenze_code_ausschnitte([finding], _repo_mit_datei(tmp_path))
+    assert finding.code_snippet == "18    schon vorhanden"
+
+
+def test_fund_ohne_zeilennummer_bleibt_unberuehrt(tmp_path: Path) -> None:
+    """pip-audit meldet Pakete, keine Codestellen."""
+    finding = _snippet_finding(None, file_path="requirements.txt", line_start=None)
+    scanner_module._ergaenze_code_ausschnitte([finding], _repo_mit_datei(tmp_path))
+    assert finding.code_snippet is None
+
+
+def test_fehlende_datei_laesst_fund_unveraendert(tmp_path: Path) -> None:
+    """Best-effort: Ein nicht lesbarer Pfad darf den Scan nicht kippen."""
+    finding = _snippet_finding("requires login", file_path="gibtsnicht.py")
+    scanner_module._ergaenze_code_ausschnitte([finding], tmp_path)
+    assert finding.code_snippet == "requires login"

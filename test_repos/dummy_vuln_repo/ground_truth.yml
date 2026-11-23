@@ -1,0 +1,283 @@
+# Ground Truth für dieses Testrepo.
+#
+# Hier steht, wie ein Fund an einer bestimmten Stelle bewertet werden
+# *sollte*. Damit lässt sich die Triage messen statt nur behaupten, sie
+# funktioniere.
+#
+# Zuordnung: Ein Scanner meldet Datei und Zeile. Das Auswertungsskript
+# bestimmt daraus über den Syntaxbaum die umgebende Funktion und
+# vergleicht sie mit `funktion` unten. Deshalb bleibt die Zuordnung
+# gültig, wenn sich Zeilennummern durch Änderungen verschieben - nur
+# Umbenennen oder Verschieben einer Funktion muss hier nachgezogen
+# werden. Code außerhalb jeder Funktion trägt `<modul>`.
+#
+# `erwartung`:
+#   true_positive  - echte Schwachstelle, die Triage soll sie bestätigen
+#   false_positive - Scanner schlägt an, der Fund ist aber harmlos
+#   kein_fund      - hier sollte kein Scanner anschlagen (sicheres
+#                    Gegenbeispiel); tut er es doch, ist das ein Fehlalarm
+#
+# `schwierigkeit: hoch` markiert die Stellen, an denen die richtige
+# Antwort nur aus dem Kontext ablesbar ist. Genau dafür existiert die
+# LLM-Triage - ein Scanner allein kann sie nicht unterscheiden.
+
+version: 1
+
+# --- Echte Schwachstellen ---------------------------------------------------
+
+code_funde:
+  - id: code_injection_eval
+    datei: app.py
+    funktion: calc
+    klasse: code_injection
+    erwartung: true_positive
+    begruendung: eval() auf einem Query-Parameter, ungefiltert.
+
+  - id: code_injection_exec
+    datei: app.py
+    funktion: run
+    klasse: code_injection
+    erwartung: true_positive
+    begruendung: exec() auf einem Query-Parameter, ungefiltert.
+
+  - id: ssti_render_template_string
+    datei: app.py
+    funktion: greet
+    klasse: server_side_template_injection
+    erwartung: true_positive
+    begruendung: Benutzereingabe wird in den Template-String hineingebaut statt als Variable übergeben.
+
+  - id: unsicheres_yaml
+    datei: app.py
+    funktion: load_config
+    klasse: unsichere_deserialisierung
+    erwartung: true_positive
+    begruendung: yaml.load ohne SafeLoader kann beliebigen Python-Code ausführen.
+
+  - id: flask_debug_und_offene_bindung
+    datei: app.py
+    funktion: <modul>
+    klasse: fehlkonfiguration
+    erwartung: true_positive
+    begruendung: debug=True erlaubt Code-Ausführung über den Werkzeug-Debugger, 0.0.0.0 macht den Dienst von außen erreichbar.
+
+  - id: md5_passwort
+    datei: auth.py
+    funktion: hash_password
+    klasse: schwache_kryptografie
+    erwartung: true_positive
+    begruendung: MD5 ist für Passwort-Hashing ungeeignet - schnell, ohne Salt, per GPU angreifbar.
+
+  - id: unsicherer_zufall_token
+    datei: auth.py
+    funktion: generate_session_token
+    klasse: unsicherer_zufall
+    erwartung: true_positive
+    begruendung: random ist nicht kryptografisch sicher und damit für Session-Tokens ungeeignet.
+
+  - id: sql_injection
+    datei: db.py
+    funktion: get_user
+    klasse: sql_injection
+    erwartung: true_positive
+    begruendung: Benutzereingabe per String-Konkatenation in der Query.
+
+  - id: command_injection_os_system
+    datei: utils.py
+    funktion: run_backup
+    klasse: command_injection
+    erwartung: true_positive
+    begruendung: Benutzereingabe wird direkt an die Shell übergeben.
+
+  - id: command_injection_shell_true
+    datei: utils.py
+    funktion: run_diagnostic
+    klasse: command_injection
+    erwartung: true_positive
+    begruendung: shell=True mit einem vom Aufrufer gesteuerten Befehl.
+
+  - id: unsichere_deserialisierung_pickle
+    datei: utils.py
+    funktion: load_cached_object
+    klasse: unsichere_deserialisierung
+    erwartung: true_positive
+    begruendung: pickle.loads auf beliebige, nicht verifizierte Daten.
+
+  - id: path_traversal
+    datei: utils.py
+    funktion: read_log
+    klasse: path_traversal
+    erwartung: true_positive
+    begruendung: Benutzereingabe wird ungeprüft in einen Dateipfad eingebaut.
+
+  - id: unsicheres_tempfile
+    datei: utils.py
+    funktion: make_temp_report
+    klasse: race_condition
+    erwartung: true_positive
+    begruendung: tempfile.mktemp ist anfällig für Race Conditions (TOCTOU).
+
+  - id: ssrf
+    datei: network.py
+    funktion: fetch_remote_resource
+    klasse: ssrf
+    erwartung: true_positive
+    begruendung: Beliebige Benutzer-URL wird ungeprüft angefragt, kein Schutz gegen interne Adressen.
+
+  - id: tls_pruefung_aus
+    datei: network.py
+    funktion: fetch_insecure
+    klasse: unsichere_transportverschluesselung
+    erwartung: true_positive
+    begruendung: verify=False erlaubt Man-in-the-Middle-Angriffe.
+
+  - id: xxe
+    datei: network.py
+    funktion: parse_remote_xml
+    klasse: xxe
+    erwartung: true_positive
+    begruendung: XML-Parsing nicht vertrauenswürdiger Eingaben ohne Schutz gegen externe Entities.
+
+  - id: hartcodiertes_secret
+    datei: config.py
+    funktion: <modul>
+    klasse: hartcodiertes_secret
+    erwartung: true_positive
+    begruendung: Schlüssel steht im Quelltext statt in einer Umgebungsvariablen.
+
+# --- Fälle, bei denen der Scanner anschlägt, der Fund aber harmlos ist -------
+
+  - id: sql_muster_ohne_eingabe
+    datei: db.py
+    funktion: get_active_users
+    klasse: sql_injection
+    erwartung: false_positive
+    schwierigkeit: hoch
+    begruendung: >-
+      String-Konkatenation sieht wie SQL-Injection aus, der eingefügte Wert
+      ist aber eine feste Konstante im Code. Ohne Datenherkunft lässt sich
+      das rein syntaktisch nicht unterscheiden.
+
+  - id: shell_true_ohne_eingabe
+    datei: utils.py
+    funktion: clear_temp_cache
+    regel: B602
+    klasse: command_injection
+    erwartung: false_positive
+    schwierigkeit: hoch
+    begruendung: >-
+      shell=True mit fest hartcodiertem Befehl ohne jede Benutzereingabe.
+      Scanner markieren jedes shell=True unabhängig vom Inhalt.
+
+  - id: md5_als_cache_schluessel
+    datei: auth.py
+    funktion: hash_cache_key
+    klasse: schwache_kryptografie
+    erwartung: false_positive
+    schwierigkeit: hoch
+    begruendung: >-
+      MD5 dient hier nur der Bildung eines Cache-Schlüssels. Kein
+      Sicherheitsmerkmal hängt von Kollisionsresistenz ab.
+
+  - id: toter_code_im_kommentar
+    datei: utils.py
+    funktion: cleanup_note
+    klasse: command_injection
+    erwartung: false_positive
+    schwierigkeit: hoch
+    begruendung: >-
+      Der verwundbare Aufruf existiert nur als Text im Docstring und wird
+      nie ausgeführt.
+
+# --- Weitere Regeln an denselben Stellen ------------------------------------
+#
+# Scanner melden an einer Codestelle oft mehrere verschiedene Regeln. Die
+# folgenden Einträge sind deshalb auf `regel` eingegrenzt und gehen den
+# allgemeinen Einträgen oben vor.
+
+  - id: rm_ohne_absoluten_pfad
+    datei: utils.py
+    funktion: clear_temp_cache
+    regel: B607
+    klasse: unsicherer_prozessstart
+    erwartung: true_positive
+    begruendung: >-
+      Eigenständiger Fund, nicht der shell=True-Fall: "rm" wird über den
+      PATH aufgelöst, eine PATH-Manipulation wäre denkbar. Geringe
+      praktische Relevanz, aber technisch berechtigt.
+
+  - id: import_pickle
+    datei: utils.py
+    funktion: <modul>
+    regel: B403
+    klasse: informationshinweis
+    erwartung: false_positive
+    begruendung: >-
+      Der bloße Import von pickle ist keine Schwachstelle. Gefährlich wird
+      erst pickle.loads auf nicht vertrauenswürdigen Daten - das steht
+      separat in load_cached_object.
+
+  - id: import_subprocess
+    datei: utils.py
+    funktion: <modul>
+    regel: B404
+    klasse: informationshinweis
+    erwartung: false_positive
+    begruendung: Der bloße Import von subprocess ist keine Schwachstelle.
+
+  - id: import_xml
+    datei: network.py
+    funktion: <modul>
+    regel: B405
+    klasse: informationshinweis
+    erwartung: false_positive
+    begruendung: >-
+      Der bloße Import von xml.etree ist keine Schwachstelle. Das Parsen
+      nicht vertrauenswürdiger Daten steht separat in parse_remote_xml.
+
+  - id: defused_xml_empfehlung
+    datei: network.py
+    funktion: <modul>
+    regel: python.lang.security.use-defused-xml.use-defused-xml
+    klasse: informationshinweis
+    erwartung: false_positive
+    begruendung: >-
+      Empfehlung, defusedxml statt der Standardbibliothek zu verwenden -
+      an der Importzeile gemeldet, nicht an der eigentlichen Parse-Stelle.
+
+# --- Sichere Gegenbeispiele: hier sollte gar nichts gemeldet werden ----------
+
+  - id: parametrisierte_query
+    datei: db.py
+    funktion: get_user_safe
+    klasse: sql_injection
+    erwartung: kein_fund
+    begruendung: Parametrisierte Query, der korrekte Weg.
+
+  - id: sicherer_zufall
+    datei: auth.py
+    funktion: generate_csrf_token
+    klasse: unsicherer_zufall
+    erwartung: kein_fund
+    begruendung: secrets.token_hex ist kryptografisch sicher.
+
+# --- Verwundbare Abhängigkeiten ---------------------------------------------
+#
+# Bewusst nicht einzeln aufgezählt: Welche CVEs pip-audit für diese
+# Versionen meldet, hängt vom Stand der Schwachstellendatenbank ab und
+# wächst mit der Zeit. Eine feste Zahl hier würde veralten und wäre dann
+# schlechter als keine Angabe.
+
+abhaengigkeiten:
+  datei: requirements.txt
+  erwartung: true_positive
+  pakete:
+    - flask
+    - pyyaml
+    - requests
+  begruendung: >-
+    Die Versionen sind bewusst alt und als verwundbar bekannt. Jeder
+    pip-audit-Fund für diese Pakete gilt als echter Fund.
+  hinweis: >-
+    Anzahl nicht festgeschrieben. Sie steigt, sobald neue Schwachstellen
+    für diese Versionen veröffentlicht werden.
