@@ -93,15 +93,31 @@ Trainiert auf 3004 realen Scanner-Funden aus 6 Repositories (3 bewusst verwundba
 Getestet an:
 - OWASP PyGoat
 - Vulnerable Flask App
+- DVPWA
 - eigenem Dummy-Repo mit bekannter Ground Truth (`test_repos/dummy_vuln_repo`) – deckt u. a. SQL-Injection, Command Injection, Code Injection (eval/exec), SSTI, SSRF, XXE, Insecure Deserialization, Path Traversal, schwache Kryptografie, unsicheren Zufall, unsicheres YAML-Laden und verwundbare Dependencies ab, inklusive bewusst mehrdeutiger Fälle (z. B. `shell=True` mit hartcodiertem statt benutzergesteuertem Befehl) zum Testen des Triage-Consensus-Mechanismus
 
-Ergebnisse (Precision/Recall) folgen in diesem README, sobald die Evaluation abgeschlossen ist.
+**Precision/Recall gegen echte Ground Truth** (`test_repos/dummy_vuln_repo/ground_truth.yml`, 17 bekannte Schwachstellenklassen + mehrdeutige Fälle + sichere Gegenbeispiele), gemessen mit `scripts/evaluate.py` an einem echten Lauf (Scanner → Pre-Filter → LLM-Triage, kein Demo-Modus). Zuordnung Fund → Ground-Truth-Eintrag über den Syntaxbaum, robust gegen Zeilenverschiebungen.
+
+| Bereich | Precision | Recall | F1 | richtig bestätigt | fälschlich bestätigt | richtig verworfen |
+|---|---|---|---|---|---|---|
+| Code-Funde | 91,9 % | 100 % | 95,8 % | 34 | 3 | 5 |
+| Abhängigkeiten (pip-audit) | 100 % | 100 % | 100 % | 51 | 0 | 0 |
+
+Precision/Recall against real ground truth, measured end-to-end (scanners → pre-filter → LLM triage, real LLM calls, no demo mode). Reproducible with `python scripts/evaluate.py --db vulnscout.db` after a real run against `test_repos/dummy_vuln_repo`.
+
+Zusätzlich wurden 6 Repositories (die vier oben plus `requests` und `click`) vollständig gescannt und von der LLM-Triage bewertet – **3.004 Funde**, als Trainingsdatensatz für das Pre-Filter-Modell (`scripts/training_data.jsonl`, siehe oben). Hier gilt die LLM-Bewertung selbst als Zielgröße, nicht als unabhängige Ground Truth – die Distillation lernt, was das LLM sagen würde, nicht was objektiv wahr ist.
 
 ## Limitations
 
-*Wird nach Projektabschluss ehrlich ausgefüllt – u. a. Umfang der Evaluation, bekannte Fehlalarme/Fehlklassifikationen, Grenzen des LLM-Ansatzes.*
+- **Scanner-Abdeckung ist unvollständig:** Von 17 bekannten Schwachstellen im Ground-Truth-Repo haben Bandit und Semgrep (Regelwerk `p/security-audit`) 3 nie gemeldet – Path Traversal, SSRF und ein hartcodiertes Secret in der Config. Die LLM-Triage bewertet nur, was mindestens ein Scanner findet; sie meldet nichts selbst.
+- **LLM-Triage ist nicht fehlerfrei:** 3 von 8 bewusst mehrdeutigen Fällen (z. B. harmloses `shell=True` ohne Benutzereingabe) wurden fälschlich als echte Schwachstelle bestätigt – daher 91,9 % statt 100 % Precision bei Code-Funden.
+- **Pre-Filter-Modell ist Distillation, keine unabhängige Verifikation:** Es lernt, die LLM-Bewertung vorherzusagen, nicht die Wahrheit selbst. Ein systematischer Fehler der LLM-Triage würde vom Pre-Filter übernommen statt korrigiert.
+- **Trainingsdatensatz für den Pre-Filter ist klein und Python-only:** 3.004 Funde aus 6 Repositories, ausschließlich Python. Für andere Sprachen oder stark abweichende Codebasen ist keine Aussage über die Pre-Filter-Qualität möglich.
+- **Kein Alertmanager:** Die 7 Prometheus-Alarmregeln werden ausgewertet, aber nicht versendet – nur in der Prometheus-Oberfläche sichtbar.
+- **Kein asynchrones Scanning:** `POST /scans` läuft synchron, ein Scan pro Request.
+- **Bekannte API-Einschränkung:** Bei Fehlschlag von `POST /scans` fehlt die Lauf-ID in der Fehlerantwort.
 
-*Filled in honestly after project completion – including evaluation scope, known false positives/misclassifications, limits of the LLM approach.*
+*English summary: scanner coverage is incomplete (3 of 17 known vulnerabilities were never flagged by Bandit/Semgrep); LLM triage misclassified 3 of 8 deliberately ambiguous cases (91.9% precision on code findings); the pre-filter model is a distillation of LLM judgment, not independent ground truth, so it inherits any systematic LLM bias; its training data (3,004 findings, 6 repos) is Python-only; no Alertmanager wiring; scanning is synchronous; a failed `POST /scans` doesn't return a run id.*
 
 ## KI-Einsatz / AI usage
 
@@ -111,4 +127,4 @@ This project was developed with assistance from Claude (architecture, code revie
 
 ## Lizenz / License
 
-TBD
+MIT – siehe [LICENSE](LICENSE).
