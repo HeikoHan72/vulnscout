@@ -173,6 +173,87 @@ def test_parse_pip_audit_no_vulns_returns_empty() -> None:
     assert _parse_pip_audit(raw, Path("requirements.txt")) == []
 
 
+# --- pip-audit: leere Ausgabe ist ein Ausfall, kein sauberes Ergebnis --------
+#
+# Hintergrund: pip-audit baut intern ein temporäres venv und braucht dafür
+# Zugriff auf den Paketindex. Ohne Netz (oder wenn Proxy-Variablen fehlen)
+# scheitert es mit Exit 1 und leerer Ausgabe. Früher wurde das als "keine
+# Schwachstellen" gewertet - ein stiller falscher Befund. Ein regulärer Lauf
+# gibt dagegen immer JSON aus, auch ohne Funde.
+
+
+def _fake_pip_audit(monkeypatch: pytest.MonkeyPatch, returncode: int, stdout: str, stderr: str) -> None:
+    fake_result = subprocess.CompletedProcess(
+        args=["pip-audit"], returncode=returncode, stdout=stdout, stderr=stderr
+    )
+    monkeypatch.setattr(scanner_module, "_run_subprocess", lambda cmd, timeout: fake_result)
+
+
+def _project_with_requirements(tmp_path: Path) -> Path:
+    (tmp_path / "requirements.txt").write_text("flask==0.12\n", encoding="utf-8")
+    return tmp_path
+
+
+def test_run_pip_audit_empty_stdout_exit_1_is_an_error_not_zero_findings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_pip_audit(monkeypatch, 1, "", "ERROR:pip_audit._cli:Failed to upgrade `pip`")
+
+    with pytest.raises(RuntimeError, match="keine Ausgabe") as excinfo:
+        run_pip_audit(_project_with_requirements(tmp_path))
+    assert "Failed to upgrade" in str(excinfo.value)  # Ursache bleibt sichtbar
+
+
+def test_run_pip_audit_empty_stdout_exit_0_is_also_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_pip_audit(monkeypatch, 0, "   \n", "")
+
+    with pytest.raises(RuntimeError, match="keine Ausgabe"):
+        run_pip_audit(_project_with_requirements(tmp_path))
+
+
+def test_run_pip_audit_valid_json_without_vulnerabilities_returns_no_findings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Der einzige Fall, der als "0 Funde" gelten darf: gültiges JSON ohne Funde.
+    _fake_pip_audit(monkeypatch, 0, '{"dependencies": [], "fixes": []}', "No known vulnerabilities found")
+
+    assert run_pip_audit(_project_with_requirements(tmp_path)) == []
+
+
+def test_run_pip_audit_exit_1_with_json_still_returns_findings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Exit 1 mit Funden ist der Normalfall und darf nicht als Fehler gelten.
+    raw = (
+        '{"dependencies": [{"name": "flask", "version": "0.12", "vulns": '
+        '[{"id": "PYSEC-2019-179", "fix_versions": ["1.0"], "description": "x"}]}]}'
+    )
+    _fake_pip_audit(monkeypatch, 1, raw, "Found 1 known vulnerability")
+
+    findings = run_pip_audit(_project_with_requirements(tmp_path))
+    assert [f.package for f in findings] == ["flask"]
+
+
+def test_run_all_scanners_records_pip_audit_outage_and_keeps_other_scanners(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Der Ausfall muss im ScanResult als Fehler stehen (und damit im Bericht
+    # und in der Metrik landen), die übrigen Scanner laufen weiter.
+    _project_with_requirements(tmp_path)
+    monkeypatch.setattr(scanner_module, "run_bandit", lambda target_dir: [])
+    monkeypatch.setattr(scanner_module, "run_semgrep", lambda target_dir, config="": [])
+    _fake_pip_audit(monkeypatch, 1, "", "ERROR: kein Netz")
+
+    result = run_all_scanners(tmp_path)
+
+    assert ToolName.PIP_AUDIT.value in result.errors
+    assert "keine Ausgabe" in result.errors[ToolName.PIP_AUDIT.value]
+    assert ToolName.BANDIT.value not in result.errors
+    assert ToolName.SEMGREP.value not in result.errors
+
+
 # --- pip-audit: doppelte Einträge derselben Schwachstelle -------------------
 
 

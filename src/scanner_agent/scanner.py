@@ -241,7 +241,17 @@ def run_pip_audit(target_dir: Path, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> l
         raise RuntimeError(f"pip-audit-Fehler (Exit {result.returncode}): {result.stderr.strip()[:500]}")
 
     if not result.stdout.strip():
-        return []
+        # Ein regulärer pip-audit-Lauf gibt immer JSON aus, auch ohne Funde
+        # (z. B. {"dependencies": [], "fixes": []}). Leere Ausgabe bedeutet,
+        # dass pip-audit vor der Ausgabe gescheitert ist - typisch, wenn es
+        # keine Verbindung zum Paketindex bekommt (kein Netz, Proxy). Das
+        # darf nicht als "keine Schwachstellen" gewertet werden, sonst sähe
+        # ein Ausfall des Tools wie eine saubere Abhängigkeitsliste aus.
+        stderr_excerpt = result.stderr.strip()[:500]
+        raise RuntimeError(
+            f"pip-audit lieferte keine Ausgabe (Exit {result.returncode}) - "
+            f"vermutlich gescheitert statt regulär beendet: {stderr_excerpt or '(keine stderr-Ausgabe)'}"
+        )
 
     data = json.loads(result.stdout)
     return _parse_pip_audit(data, requirements_file)
