@@ -58,19 +58,34 @@ class ScanResult(BaseModel):
     errors: dict[str, str] = Field(default_factory=dict)
 
 
+# Umgebungsvariablen, die an Scanner-Subprozesse weitergereicht werden.
+# Allowlist statt Denylist: Der API-Prozess läuft mit ANTHROPIC_API_KEY
+# und ggf. weiteren sensiblen Werten im Environment, die die Scanner
+# nicht brauchen. Statt nur den bekannten Schlüssel auszuschließen,
+# wird explizit nur das benötigte Minimum durchgereicht - so wird auch
+# ein künftig neu gesetzter Secret-Wert nicht automatisch mitgegeben.
+_SAFE_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR")
+
+
 def _run_subprocess(cmd: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
     """Führt ein Scanner-Kommando aus und gibt das Ergebnis zurück.
 
-    Setzt zusätzlich Umgebungsvariablen, die Semgrep daran hindern,
-    Telemetrie zu senden oder online nach einer neuen Version zu
-    suchen - für Bandit und pip-audit wirkungslos, aber unschädlich.
+    Reicht nur eine Allowlist an Umgebungsvariablen durch (siehe
+    `_SAFE_ENV_KEYS`), damit sensible Werte aus dem API-Prozess
+    (z. B. ANTHROPIC_API_KEY) nicht an die Scanner-Subprozesse
+    gelangen. Setzt zusätzlich Umgebungsvariablen, die Semgrep daran
+    hindern, Telemetrie zu senden oder online nach einer neuen
+    Version zu suchen - für Bandit und pip-audit wirkungslos, aber
+    unschädlich.
 
     Wirft `FileNotFoundError`, wenn das Tool nicht installiert ist,
     und `subprocess.TimeoutExpired`, wenn das Zeitlimit überschritten
     wird. Beide Fälle werden von den aufrufenden `run_*`-Funktionen
     behandelt.
     """
-    env = {**os.environ, "SEMGREP_SEND_METRICS": "off", "SEMGREP_ENABLE_VERSION_CHECK": "0"}
+    env = {k: v for k, v in os.environ.items() if k in _SAFE_ENV_KEYS}
+    env["SEMGREP_SEND_METRICS"] = "off"
+    env["SEMGREP_ENABLE_VERSION_CHECK"] = "0"
     logger.debug("Führe Kommando aus: %s", " ".join(cmd))
     return subprocess.run(
         cmd,
