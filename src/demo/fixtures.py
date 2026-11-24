@@ -51,10 +51,12 @@ def fixture_triage(findings: list[Finding]) -> list[TriageAssessment]:
 
     Jeder Fund wird als echter Fund mit seinem vom Scanner gemeldeten
     Schweregrad übernommen (`is_true_positive=True`, `needs_review=False`).
-    Das ist bewusst keine echte Triage -- es gibt im Demo-Modus keinen
-    Consensus-Check und keine Fehlalarm-Erkennung, nur eine
-    1:1-Übernahme der Scanner-Ausgabe, transparent als solche
-    gekennzeichnet (siehe `DEMO_REASONING`).
+    Meldet der Scanner keinen (praktisch alle pip-audit-Funde), gilt der
+    Schweregrad aus der OSV-Datenbank, sofern die Anreicherung einen
+    gefunden hat -- das steht dann in der Begründung. Das ist bewusst
+    keine echte Triage -- es gibt im Demo-Modus keinen Consensus-Check und
+    keine Fehlalarm-Erkennung, nur eine 1:1-Übernahme der vorhandenen
+    Daten, transparent als solche gekennzeichnet (siehe `DEMO_REASONING`).
 
     Args:
         findings: Die Scanner-Funde dieses Laufs.
@@ -62,18 +64,28 @@ def fixture_triage(findings: list[Finding]) -> list[TriageAssessment]:
     Returns:
         Eine `TriageAssessment` pro Fund.
     """
-    return [
-        TriageAssessment(
-            finding_id=finding.id,
-            is_true_positive=True,
-            severity=finding.severity,
-            cvss_score=_SEVERITY_TO_CVSS.get(finding.severity, 5.0),
-            confidence=1.0,
-            reasoning=DEMO_REASONING,
-            needs_review=False,
+    assessments = []
+    for finding in findings:
+        severity = finding.severity
+        reasoning = DEMO_REASONING
+        if severity == Severity.UNKNOWN and finding.osv_severity is not None:
+            severity = finding.osv_severity
+            reasoning = (
+                f"{DEMO_REASONING} Der Schweregrad stammt aus der "
+                f"OSV-Datenbank ({finding.severity_source}), nicht vom Scanner."
+            )
+        assessments.append(
+            TriageAssessment(
+                finding_id=finding.id,
+                is_true_positive=True,
+                severity=severity,
+                cvss_score=_SEVERITY_TO_CVSS.get(severity, 5.0),
+                confidence=1.0,
+                reasoning=reasoning,
+                needs_review=False,
+            )
         )
-        for finding in findings
-    ]
+    return assessments
 
 
 def _fix_hint(finding: Finding) -> str:
@@ -122,6 +134,17 @@ def fixture_report(context: ReportContext) -> str:
         "",
     ]
 
+    if any(pair.finding.osv_severity for pair in context.detailed):
+        lines.extend(
+            [
+                "> **Hinweis zur Einstufung:** Bei Abhängigkeits-Funden "
+                "(pip-audit) stammt der Schweregrad nicht vom Scanner, sondern "
+                "aus der öffentlichen Datenbank OSV; die Quelle steht beim "
+                "jeweiligen Fund.",
+                "",
+            ]
+        )
+
     if context.scanner_errors:
         lines.append("**Scanner-Fehler in diesem Lauf:**")
         for tool, error in context.scanner_errors.items():
@@ -152,6 +175,14 @@ def fixture_report(context: ReportContext) -> str:
             lines.append(f"- **Tool/Regel:** {finding.tool.value} / {finding.rule_id}")
             if finding.description:
                 lines.append(f"- **Beschreibung:** {finding.description}")
+            if finding.osv_severity:
+                lines.append(
+                    f"- **Schweregrad-Quelle:** OSV-Datenbank ({finding.severity_source})"
+                )
+            if finding.cvss_vector:
+                lines.append(f"- **CVSS-Vektor:** {finding.cvss_vector}")
+            if finding.osv_cwe_ids:
+                lines.append(f"- **CWE (OSV):** {', '.join(finding.osv_cwe_ids)}")
             lines.append(f"- **Hinweis zur Behebung:** {_fix_hint(finding)}")
             lines.append("")
 

@@ -16,7 +16,9 @@ auskommentierter Code, Strings, die nur angezeigt und nicht ausgeführt oder \
 in eine Abfrage eingesetzt werden, bereits durch Parametrisierung oder \
 Escaping entschärfte Stellen, Vorkommen in offensichtlich nicht \
 produktivem Code (z. B. Migrationsskripte, die nur lokal laufen).
-2. Den Schweregrad: low, medium, high oder critical.
+2. Den Schweregrad: low, medium, high oder critical. Liegt bei einem \
+Abhängigkeits-Fund ein Schweregrad aus der öffentlichen Datenbank OSV vor, \
+ist er dein Ausgangspunkt; weiche nur mit konkreter Begründung davon ab.
 3. Einen CVSS-ähnlichen Score von 0 bis 10 (grobe Einschätzung reicht, \
 keine formale CVSS-Berechnung).
 4. Deine Konfidenz in diese Einschätzung, als Zahl zwischen 0 und 1. \
@@ -61,6 +63,15 @@ def build_user_prompt(findings: list[Finding]) -> str:
             lines.append(f"Paket: {finding.package} (installiert: {finding.installed_version})")
             if finding.fix_versions:
                 lines.append(f"Behoben in Version(en): {', '.join(finding.fix_versions)}")
+        if finding.osv_severity:
+            lines.append(
+                f"Schweregrad laut OSV-Datenbank: {finding.osv_severity.value} "
+                f"(Quelle: {finding.severity_source})"
+            )
+        if finding.cvss_vector:
+            lines.append(f"CVSS-Vektor: {finding.cvss_vector}")
+        if finding.osv_cwe_ids:
+            lines.append(f"CWE laut OSV: {', '.join(finding.osv_cwe_ids)}")
         if finding.description:
             lines.append(f"Beschreibung des Tools: {finding.description}")
         if finding.code_snippet:

@@ -13,6 +13,7 @@ from typing import Optional
 import anthropic
 
 from src.demo.fixtures import fixture_report, fixture_triage
+from src.enrichment.osv import enrich_findings
 from src.monitoring.record import record_run
 from src.prefilter.prefilter import apply_prefilter
 from src.report_agent.report import build_report_context, generate_report
@@ -75,6 +76,10 @@ def run_pipeline(
 
     try:
         scan_result = run_all_scanners(repo_path, semgrep_config=semgrep_config)
+        # Schweregrad für Abhängigkeits-Funde aus OSV nachtragen (best effort,
+        # wirft nie; siehe src/enrichment/osv.py). Vor dem Speichern, damit
+        # die angereicherten Felder mit in der Datenbank landen.
+        enrich_findings(scan_result.findings)
         findings = scan_result.findings
         store.save_findings(run.id, scan_result.findings)
         run.scanner_errors = scan_result.errors

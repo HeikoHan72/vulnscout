@@ -74,6 +74,19 @@ class Finding(BaseModel):
             pip-audit-Funden gesetzt.
         fix_versions: Versionen, in denen die Lücke laut pip-audit
             behoben ist.
+        osv_severity: Schweregrad aus der öffentlichen Datenbank OSV, nur bei
+            pip-audit-Funden und nur, wenn die Anreicherung (siehe
+            `src/enrichment/osv.py`) einen gefunden hat. Steht bewusst in
+            einem eigenen Feld: `severity` bleibt der Wert des Scanners, weil
+            das Pre-Filter-Modell ihn als Merkmal nutzt.
+        cvss_vector: CVSS-Vektor aus OSV, unverändert übernommen.
+        osv_cwe_ids: CWE-Nummern aus OSV. Eigenes Feld aus demselben Grund
+            wie `osv_severity` (`cwe` ist ein Merkmal des Pre-Filters).
+        osv_aliases: Weitere IDs derselben Schwachstelle laut OSV (z. B.
+            CVE- und GHSA-Kennungen).
+        severity_source: Woher `osv_severity` stammt, als "osv:<ID>" mit dem
+            Eintrag, der den Schweregrad geliefert hat. `None`, wenn keiner
+            geliefert wurde.
         raw: Unveränderte Rohausgabe des Tools für genau diesen Fund,
             zur Nachvollziehbarkeit und für Debugging.
     """
@@ -97,5 +110,11 @@ class Finding(BaseModel):
     package: Optional[str] = None
     installed_version: Optional[str] = None
     fix_versions: list[str] = Field(default_factory=list)
+
+    osv_severity: Optional[Severity] = None
+    cvss_vector: Optional[str] = None
+    osv_cwe_ids: list[str] = Field(default_factory=list)
+    osv_aliases: list[str] = Field(default_factory=list)
+    severity_source: Optional[str] = None
 
     raw: dict = Field(default_factory=dict)

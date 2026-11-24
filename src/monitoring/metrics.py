@@ -136,3 +136,16 @@ PREFILTER_SKIPPED_LLM_CALLS = Counter(
     "vulnscout_prefilter_skipped_llm_calls_total",
     "Geschätzte Anzahl eingesparter LLM-Aufrufe durch das Pre-Filter-Modell",
 )
+
+# --- OSV-Anreicherung: Schweregrad für Abhängigkeits-Funde -------------------
+#
+# pip-audit liefert keinen Schweregrad; die Anreicherung (siehe
+# src/enrichment/osv.py) holt ihn aus der Datenbank OSV. Gezählt werden
+# Funde, nicht Anfragen. "unavailable" steigt, wenn OSV nicht erreichbar
+# war - die Funde laufen dann unverändert weiter.
+
+OSV_ENRICHMENT = Counter(
+    "vulnscout_osv_enrichment_total",
+    "Abhängigkeits-Funde nach Ergebnis der OSV-Anreicherung",
+    ["result"],  # enriched, no_data, unavailable
+)
