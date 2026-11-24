@@ -103,7 +103,12 @@ def werte_aus(
     Getrennt, weil es zwei verschiedene Fragen sind: Bei Code geht es um
     Kontextverständnis, bei Abhängigkeiten um einen Abgleich mit einer
     Schwachstellendatenbank. Eine gemeinsame Kennzahl würde beides
-    vermischen und von den 51 Dependency-Funden dominiert.
+    vermischen und von den Dependency-Funden dominiert.
+
+    Grenze der Abhängigkeits-Kennzahl: Jeder Fund in der requirements-Datei
+    gilt als erwartet echt. Precision, Recall und F1 messen dort deshalb nur,
+    ob die Triage etwas verworfen hat. Ob die Einstufung stimmt, zeigt
+    `abhaengigkeits_schweregrade`.
     """
     nach_id = {b["finding_id"]: b for b in bewertungen}
 
@@ -201,11 +206,60 @@ def kennzahlen(e: Ergebnis) -> dict[str, Optional[float]]:
 # --- Ausgabe -----------------------------------------------------------------
 
 
+_RANG = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+
+def abhaengigkeits_schweregrade(
+    funde: list[dict], bewertungen: list[dict], dep_datei: str
+) -> dict[str, int]:
+    """Vergleicht die Einstufung bestätigter Abhängigkeits-Funde mit OSV.
+
+    Zählt nur bestätigte Funde in `dep_datei`:
+    - `bestaetigt`: alle bestätigten Abhängigkeits-Funde
+    - `ohne_osv`: davon ohne OSV-Schweregrad (kein Vergleich möglich)
+    - `gleich`, `hoeher`, `niedriger`: Einstufung der Triage gegenüber OSV
+    - `angehoben`: Einstufung wurde durch die OSV-Untergrenze angehoben
+      (`severity_raised_from` gesetzt)
+
+    `niedriger` ist mit der Untergrenze nicht mehr möglich; der Wert bleibt,
+    damit sich auch Läufe aus der Zeit davor auswerten lassen.
+    """
+    nach_id = {b["finding_id"]: b for b in bewertungen}
+    zaehler: Counter[str] = Counter()
+    for fund in funde:
+        if fund.get("file_path") != dep_datei:
+            continue
+        bewertung = nach_id.get(fund["id"])
+        if bewertung is None or not bewertung.get("is_true_positive"):
+            continue
+        zaehler["bestaetigt"] += 1
+        if bewertung.get("severity_raised_from"):
+            zaehler["angehoben"] += 1
+        osv = fund.get("osv_severity")
+        if osv not in _RANG:
+            zaehler["ohne_osv"] += 1
+            continue
+        triage = _RANG.get(bewertung.get("severity"), -1)
+        if triage == _RANG[osv]:
+            zaehler["gleich"] += 1
+        elif triage > _RANG[osv]:
+            zaehler["hoeher"] += 1
+        else:
+            zaehler["niedriger"] += 1
+    return dict(zaehler)
+
+
 def _prozent(wert: Optional[float]) -> str:
     return "n/a" if wert is None else f"{wert:.1%}"
 
 
-def berichte(run_id: str, code: Ergebnis, deps: Ergebnis, funde: list[dict]) -> None:
+def berichte(
+    run_id: str,
+    code: Ergebnis,
+    deps: Ergebnis,
+    funde: list[dict],
+    schweregrade: Optional[dict[str, int]] = None,
+) -> None:
     print(f"Lauf: {run_id}")
     print(f"Funde gesamt: {len(funde)}  " + str(dict(Counter(f["tool"] for f in funde))))
     print()
@@ -222,6 +276,23 @@ def berichte(run_id: str, code: Ergebnis, deps: Ergebnis, funde: list[dict]) -> 
             f"  Precision {_prozent(k['precision'])}   "
             f"Recall {_prozent(k['recall'])}   F1 {_prozent(k['f1'])}"
         )
+        print()
+        if e is deps:
+            print("  Hinweis: Jeder Fund in der requirements-Datei gilt als erwartet echt.")
+            print("  Die Kennzahlen zeigen daher nur, dass nichts verworfen wurde.")
+            print()
+
+    if schweregrade is not None:
+        print("--- Abhängigkeiten: Einstufung gegen OSV (nur bestätigte Funde) ---")
+        for schluessel, text in (
+            ("bestaetigt", "bestätigt"),
+            ("ohne_osv", "ohne OSV-Schweregrad"),
+            ("gleich", "Einstufung gleich OSV"),
+            ("hoeher", "Einstufung höher als OSV"),
+            ("niedriger", "Einstufung niedriger als OSV"),
+            ("angehoben", "durch die Untergrenze angehoben"),
+        ):
+            print(f"  {text:<34}{schweregrade.get(schluessel, 0)}")
         print()
 
     if code.uebersehen:
@@ -260,7 +331,10 @@ def main() -> int:
 
     run_id, funde, bewertungen = lade_lauf(args.db, args.run_id)
     code, deps = werte_aus(funde, bewertungen, ground_truth, args.repo)
-    berichte(run_id, code, deps, funde)
+    schweregrade = abhaengigkeits_schweregrade(
+        funde, bewertungen, ground_truth["abhaengigkeiten"]["datei"]
+    )
+    berichte(run_id, code, deps, funde, schweregrade)
     return 0
 
 

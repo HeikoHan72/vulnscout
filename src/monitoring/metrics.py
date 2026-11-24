@@ -149,3 +149,16 @@ OSV_ENRICHMENT = Counter(
     "Abhängigkeits-Funde nach Ergebnis der OSV-Anreicherung",
     ["result"],  # enriched, no_data, unavailable
 )
+
+# --- Untergrenze aus OSV: wie oft die Triage nach oben korrigiert wird -------
+#
+# Bestätigte Abhängigkeits-Funde werden nach der Triage mindestens auf den
+# OSV-Schweregrad angehoben (siehe src/enrichment/floor.py). "raised" zählt die
+# Funde, bei denen die Einstufung der Triage darunter lag, "unchanged" die,
+# bei denen sie schon mindestens so hoch war.
+
+SEVERITY_FLOOR = Counter(
+    "vulnscout_severity_floor_total",
+    "Bestätigte Abhängigkeits-Funde nach Anwendung der OSV-Untergrenze",
+    ["result"],  # raised, unchanged
+)

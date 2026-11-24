@@ -13,6 +13,7 @@ from typing import Optional
 import anthropic
 
 from src.demo.fixtures import fixture_report, fixture_triage
+from src.enrichment.floor import apply_osv_severity_floor
 from src.enrichment.osv import enrich_findings
 from src.monitoring.record import record_run
 from src.prefilter.prefilter import apply_prefilter
@@ -100,6 +101,13 @@ def run_pipeline(
                 triage_findings(findings_for_llm, client=client) if findings_for_llm else []
             )
             assessments = prefilter_assessments + llm_assessments
+        # Untergrenze aus OSV für bestätigte Abhängigkeits-Funde (siehe
+        # src/enrichment/floor.py). Vor dem Speichern, damit die angehobene
+        # Einstufung in Datenbank, Bericht und Metriken überall gleich ist.
+        try:
+            apply_osv_severity_floor(scan_result.findings, assessments)
+        except Exception:  # noqa: BLE001 - die Triage-Ergebnisse bleiben dann unverändert
+            logger.exception("OSV-Untergrenze konnte nicht angewendet werden")
         store.save_assessments(run.id, assessments)
         run.status = RunStatus.REPORTING
         run.updated_at = datetime.now(timezone.utc)

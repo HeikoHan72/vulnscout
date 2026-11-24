@@ -19,7 +19,11 @@ Escaping entschärfte Stellen, Vorkommen in offensichtlich nicht \
 produktivem Code (z. B. Migrationsskripte, die nur lokal laufen).
 2. Den Schweregrad: low, medium, high oder critical. Liegt bei einem \
 Abhängigkeits-Fund ein Schweregrad aus der öffentlichen Datenbank OSV vor, \
-ist er dein Ausgangspunkt; weiche nur mit konkreter Begründung davon ab.
+ist er dein Ausgangspunkt und zugleich die Untergrenze: Eine niedrigere \
+Einstufung bestätigter Abhängigkeits-Funde wird nach deiner Antwort \
+automatisch auf diesen Wert angehoben. Du kannst höher einstufen, wenn der \
+Kontext es rechtfertigt. Deine Aufgabe bei Abhängigkeits-Funden ist vor \
+allem die Frage, ob es ein echter Treffer ist.
 3. Einen CVSS-ähnlichen Score von 0 bis 10 (grobe Einschätzung reicht, \
 keine formale CVSS-Berechnung).
 4. Deine Konfidenz in diese Einschätzung, als Zahl zwischen 0 und 1. \

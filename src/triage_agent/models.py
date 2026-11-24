@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 from src.scanner_agent.models import Severity
@@ -25,6 +27,11 @@ class TriageAssessment(BaseModel):
             `triage.CONFIDENCE_THRESHOLD` definierten Schwelle lösen
             einen Consensus-Check aus.
         reasoning: Kurze, nachvollziehbare Begründung des Agenten.
+        severity_raised_from: Nur gesetzt, wenn `severity` nachträglich auf
+            den Wert der OSV-Datenbank angehoben wurde (siehe
+            `src/enrichment/floor.py`). Enthält dann die ursprüngliche
+            Einstufung des Triage-Agenten, damit die Anhebung nachprüfbar
+            bleibt.
         needs_review: Wird nachträglich auf True gesetzt, wenn ein
             Consensus-Check zu keiner Übereinstimmung kam. Solche
             Funde sollten im Report gesondert markiert werden, nicht
@@ -38,3 +45,4 @@ class TriageAssessment(BaseModel):
     confidence: float = Field(ge=0, le=1)
     reasoning: str
     needs_review: bool = False
+    severity_raised_from: Optional[Severity] = None
