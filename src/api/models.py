@@ -12,9 +12,13 @@ class ScanRequest(BaseModel):
 
     Attributes:
         repo_path: Pfad des zu scannenden Repositories. Muss auf dem
-            Server, auf dem die API läuft, existieren.
+            Server, auf dem die API läuft, existieren und unterhalb
+            des erlaubten Scan-Bereichs liegen (Umgebungsvariable
+            VULNSCOUT_SCAN_ROOT, Standard: test_repos).
         semgrep_config: Semgrep-Regelwerk, das an den Scanner-Agent
-            durchgereicht wird. Standard: das öffentliche
+            durchgereicht wird. Erlaubt sind eine Registry-Kennung
+            der Form p/<name> oder eine Regeldatei innerhalb des
+            gescannten Repositories. Standard: das öffentliche
             Security-Audit-Regelwerk.
         demo_mode: Erzwingt den Demo-/Fixture-Modus (`true`, kein
             LLM-Aufruf) oder den echten LLM-Modus (`false`). Bei
@@ -24,11 +28,17 @@ class ScanRequest(BaseModel):
 
     repo_path: str = Field(
         ...,
-        description="Pfad des zu scannenden Repositories (lokal auf dem Server).",
+        description=(
+            "Pfad des zu scannenden Repositories, unterhalb des erlaubten "
+            "Scan-Bereichs (VULNSCOUT_SCAN_ROOT)."
+        ),
     )
     semgrep_config: str = Field(
         default="p/security-audit",
-        description="Semgrep-Regelwerk (Registry-Name oder lokaler Pfad).",
+        description=(
+            "Semgrep-Regelwerk: Registry-Kennung p/<name> oder Regeldatei "
+            "im gescannten Repository."
+        ),
     )
     demo_mode: Optional[bool] = Field(
         default=None,
