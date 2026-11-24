@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from src.api.models import ScanRequest
+from src.api.security import resolve_repo_path, validate_semgrep_config
 from src.monitoring import metrics as m
 from src.orchestrator.models import ScanRun
 from src.orchestrator.orchestrator import run_pipeline
@@ -114,17 +115,21 @@ def create_scan(request: ScanRequest) -> ScanRun:
         Den fertigen `ScanRun` mit Status `completed` und Bericht,
         oder eine Fehlerantwort, falls ein Schritt fehlschlägt.
     """
-    if not os.path.isdir(request.repo_path):
-        raise HTTPException(
-            status_code=400,
-            detail=f"repo_path existiert nicht oder ist kein Verzeichnis: {request.repo_path}",
-        )
+    # Eingaben prüfen, bevor irgendetwas gescannt wird (fail-closed, siehe
+    # src/api/security.py). Geprüft wird der aufgelöste Pfad; an die Pipeline
+    # geht weiterhin der ursprüngliche Pfad-String, damit sich das Verhalten
+    # bei erlaubten Anfragen nicht ändert.
+    try:
+        repo_dir = resolve_repo_path(request.repo_path)
+        semgrep_config = validate_semgrep_config(request.semgrep_config, repo_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
         return run_pipeline(
             request.repo_path,
             db_path=DB_PATH,
-            semgrep_config=request.semgrep_config,
+            semgrep_config=semgrep_config,
             demo_mode=request.demo_mode,
         )
     except Exception as exc:  # noqa: BLE001 - wird als 500 weitergegeben

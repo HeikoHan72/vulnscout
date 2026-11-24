@@ -20,6 +20,11 @@ services:
       - .env
     environment:
       - VULNSCOUT_DB_PATH=/app/data/vulnscout.db
+      # Erlaubter Bereich für repo_path. Die API lehnt jeden Pfad außerhalb mit
+      # HTTP 400 ab (Schutz davor, dass ein Aufrufer beliebige Verzeichnisse im
+      # Container scannen lässt). Hier ausdrücklich gesetzt statt nur über den
+      # Standard, damit die Einstellung im Compose-File sichtbar ist.
+      - VULNSCOUT_SCAN_ROOT=/app/test_repos
       # Überschreibt bewusst einen etwaigen Wert aus .env: Innerhalb des
       # Containers zeigt "localhost" auf den Container selbst, nicht auf den
       # Host. Der Tracking-Server ist hier nur unter seinem Dienstnamen
