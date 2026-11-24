@@ -12,6 +12,7 @@ ist (z. B. in einer CI-Umgebung ohne Internetzugang für Semgrep).
 
 from __future__ import annotations
 
+import copy
 import shutil
 import subprocess
 from pathlib import Path
@@ -170,6 +171,112 @@ def test_run_semgrep_valid_empty_results_json_returns_no_findings(
 def test_parse_pip_audit_no_vulns_returns_empty() -> None:
     raw = {"dependencies": [{"name": "requests", "version": "2.31.0", "vulns": []}]}
     assert _parse_pip_audit(raw, Path("requirements.txt")) == []
+
+
+# --- pip-audit: doppelte Einträge derselben Schwachstelle -------------------
+
+
+def _dup_raw(*vulns: dict, name: str = "flask", version: str = "0.12") -> dict:
+    return {"dependencies": [{"name": name, "version": version, "vulns": list(vulns)}]}
+
+
+def test_parse_pip_audit_merges_duplicate_entries_of_same_vulnerability() -> None:
+    raw = _dup_raw(
+        {"id": "PYSEC-2019-179", "fix_versions": ["1.0"], "description": "A"},
+        {"id": "PYSEC-2019-179", "fix_versions": ["1.0"], "description": "B"},
+    )
+    findings = _parse_pip_audit(raw, Path("requirements.txt"))
+    assert len(findings) == 1
+    assert findings[0].rule_id == "PYSEC-2019-179"
+
+
+def test_parse_pip_audit_merge_unites_fix_versions_in_order_of_appearance() -> None:
+    raw = _dup_raw(
+        {"id": "PYSEC-2020-176", "fix_versions": ["5.2b1"]},
+        {"id": "PYSEC-2020-176", "fix_versions": ["5.2", "5.2b1"]},
+        name="pyyaml",
+        version="5.1",
+    )
+    findings = _parse_pip_audit(raw, Path("requirements.txt"))
+    assert len(findings) == 1
+    assert findings[0].fix_versions == ["5.2b1", "5.2"]
+
+
+def test_parse_pip_audit_merge_keeps_the_more_detailed_description() -> None:
+    short = "Kurz."
+    long = "Deutlich ausführlichere Beschreibung der Schwachstelle."
+    for first, second in ((short, long), (long, short)):
+        raw = _dup_raw(
+            {"id": "X-1", "description": first},
+            {"id": "X-1", "description": second},
+        )
+        assert _parse_pip_audit(raw, Path("requirements.txt"))[0].description == long
+
+
+def test_parse_pip_audit_merge_keeps_description_when_duplicate_has_none() -> None:
+    raw = _dup_raw({"id": "X-1", "description": "Vorhanden"}, {"id": "X-1"})
+    assert _parse_pip_audit(raw, Path("requirements.txt"))[0].description == "Vorhanden"
+
+
+def test_parse_pip_audit_merge_preserves_raw_of_the_duplicate() -> None:
+    first = {"id": "X-1", "aliases": ["CVE-1"]}
+    second = {"id": "X-1", "aliases": ["CVE-1", "GHSA-1"]}
+    finding = _parse_pip_audit(_dup_raw(first, second), Path("requirements.txt"))[0]
+    assert finding.raw["aliases"] == ["CVE-1"]
+    assert finding.raw["merged_entries"] == [second]
+
+
+def test_parse_pip_audit_does_not_mutate_its_input() -> None:
+    raw = _dup_raw(
+        {"id": "X-1", "fix_versions": ["1"]},
+        {"id": "X-1", "fix_versions": ["2"]},
+    )
+    snapshot = copy.deepcopy(raw)
+    _parse_pip_audit(raw, Path("requirements.txt"))
+    assert raw == snapshot
+
+
+def test_parse_pip_audit_same_id_in_different_package_or_version_is_not_merged() -> None:
+    raw = {
+        "dependencies": [
+            {"name": "flask", "version": "0.12", "vulns": [{"id": "X-1"}]},
+            {"name": "flask", "version": "1.0", "vulns": [{"id": "X-1"}]},
+            {"name": "werkzeug", "version": "0.12", "vulns": [{"id": "X-1"}]},
+        ]
+    }
+    assert len(_parse_pip_audit(raw, Path("requirements.txt"))) == 3
+
+
+def test_parse_pip_audit_different_ids_of_one_package_are_not_merged() -> None:
+    raw = _dup_raw({"id": "X-1"}, {"id": "X-2"})
+    findings = _parse_pip_audit(raw, Path("requirements.txt"))
+    assert [f.rule_id for f in findings] == ["X-1", "X-2"]
+
+
+def test_parse_pip_audit_entries_without_id_are_never_merged() -> None:
+    raw = _dup_raw({"fix_versions": ["1"]}, {"fix_versions": ["1"]})
+    findings = _parse_pip_audit(raw, Path("requirements.txt"))
+    assert len(findings) == 2
+    assert all(f.rule_id == "UNKNOWN" for f in findings)
+
+
+def test_parse_pip_audit_merges_duplicates_across_repeated_dependency_blocks() -> None:
+    # Dasselbe Paket kann als zwei Blöcke in der Ausgabe stehen.
+    raw = {
+        "dependencies": [
+            {"name": "urllib3", "version": "1.24", "vulns": [{"id": "X-1"}]},
+            {"name": "urllib3", "version": "1.24", "vulns": [{"id": "X-1"}, {"id": "X-2"}]},
+        ]
+    }
+    findings = _parse_pip_audit(raw, Path("requirements.txt"))
+    assert [f.rule_id for f in findings] == ["X-1", "X-2"]
+
+
+def test_parse_pip_audit_every_vulnerability_doubled_yields_unique_count() -> None:
+    # Nachbildung des beobachteten Musters: 25 Schwachstellen je zweimal, eine einmal.
+    vulns = [{"id": f"V-{i}"} for i in range(25)] * 2 + [{"id": "V-single"}]
+    findings = _parse_pip_audit(_dup_raw(*vulns), Path("requirements.txt"))
+    assert len(findings) == 26
 
 
 # ---------------------------------------------------------------------------

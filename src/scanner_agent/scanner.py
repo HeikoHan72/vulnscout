@@ -253,28 +253,60 @@ def _parse_pip_audit(data: Any, requirements_file: Path) -> list[Finding]:
     deps = data.get("dependencies", data) if isinstance(data, dict) else data
 
     findings: list[Finding] = []
+    # Dieselbe Schwachstelle kommt in der Rohausgabe von pip-audit mehrfach vor
+    # (beobachtet: in 25 von 26 Fällen genau zweimal, mit leicht abweichendem
+    # Beschreibungstext und teilweise abweichenden Fix-Versionen). Wir führen
+    # sie zu einem Fund zusammen, damit Zählungen und Auswertungen nicht
+    # verdoppelt werden. Schlüssel: Paket, Version und ID der Schwachstelle.
+    # Ohne ID wird nie zusammengeführt, weil nicht erkennbar ist, ob es
+    # dieselbe Schwachstelle ist.
+    seen: dict[tuple[str, str, str], Finding] = {}
     for dep in deps:
         name = dep.get("name", "unbekanntes Paket")
         version = dep.get("version", "")
         for vuln in dep.get("vulns", []):
-            findings.append(
-                Finding(
-                    tool=ToolName.PIP_AUDIT,
-                    rule_id=vuln.get("id", "UNKNOWN"),
-                    # pip-audit liefert keinen eigenen Schweregrad -
-                    # das übernimmt später der Triage-Agent anhand der
-                    # Vulnerability-ID.
-                    severity=Severity.UNKNOWN,
-                    file_path=str(requirements_file.name),
-                    title=f"Bekannte Schwachstelle in {name} {version}: {vuln.get('id', '')}",
-                    description=vuln.get("description"),
-                    package=name,
-                    installed_version=version,
-                    fix_versions=vuln.get("fix_versions", []),
-                    raw=vuln,
-                )
+            vuln_id = vuln.get("id")
+            key = (name, version, vuln_id) if vuln_id else None
+            if key is not None and key in seen:
+                _merge_pip_audit_duplicate(seen[key], vuln)
+                continue
+            finding = Finding(
+                tool=ToolName.PIP_AUDIT,
+                rule_id=vuln.get("id", "UNKNOWN"),
+                # pip-audit liefert keinen eigenen Schweregrad -
+                # das übernimmt später der Triage-Agent anhand der
+                # Vulnerability-ID.
+                severity=Severity.UNKNOWN,
+                file_path=str(requirements_file.name),
+                title=f"Bekannte Schwachstelle in {name} {version}: {vuln.get('id', '')}",
+                description=vuln.get("description"),
+                package=name,
+                installed_version=version,
+                fix_versions=list(vuln.get("fix_versions", [])),
+                raw=dict(vuln),
             )
+            findings.append(finding)
+            if key is not None:
+                seen[key] = finding
     return findings
+
+
+def _merge_pip_audit_duplicate(target: Finding, duplicate: dict) -> None:
+    """Übernimmt die Angaben eines doppelten pip-audit-Eintrags in `target`.
+
+    Fix-Versionen werden vereinigt (Reihenfolge des ersten Auftretens bleibt
+    erhalten), von zwei Beschreibungen gewinnt die ausführlichere. Die
+    Rohdaten des Duplikats bleiben unter `raw["merged_entries"]` erhalten.
+    """
+    for version in duplicate.get("fix_versions", []):
+        if version not in target.fix_versions:
+            target.fix_versions.append(version)
+
+    other_description = duplicate.get("description")
+    if other_description and len(other_description) > len(target.description or ""):
+        target.description = other_description
+
+    target.raw.setdefault("merged_entries", []).append(duplicate)
 
 
 def run_all_scanners(target_dir: Path, semgrep_config: str = "p/security-audit") -> ScanResult:
