@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from src.enrichment.display import osv_context_lines
 from src.scanner_agent.models import Finding
 
 SYSTEM_PROMPT = """\
@@ -63,15 +64,7 @@ def build_user_prompt(findings: list[Finding]) -> str:
             lines.append(f"Paket: {finding.package} (installiert: {finding.installed_version})")
             if finding.fix_versions:
                 lines.append(f"Behoben in Version(en): {', '.join(finding.fix_versions)}")
-        if finding.osv_severity:
-            lines.append(
-                f"Schweregrad laut OSV-Datenbank: {finding.osv_severity.value} "
-                f"(Quelle: {finding.severity_source})"
-            )
-        if finding.cvss_vector:
-            lines.append(f"CVSS-Vektor: {finding.cvss_vector}")
-        if finding.osv_cwe_ids:
-            lines.append(f"CWE laut OSV: {', '.join(finding.osv_cwe_ids)}")
+        lines.extend(osv_context_lines(finding))
         if finding.description:
             lines.append(f"Beschreibung des Tools: {finding.description}")
         if finding.code_snippet:

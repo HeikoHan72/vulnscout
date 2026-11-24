@@ -17,6 +17,7 @@ wurden eins zu eins übernommen und nach Schweregrad sortiert.
 
 from __future__ import annotations
 
+from src.enrichment.display import VECTOR_MISMATCH_HINT
 from src.report_agent.models import ReportContext
 from src.report_agent.report import _render_empty_report, build_report_context
 from src.scanner_agent.models import Finding, Severity, ToolName
@@ -177,10 +178,16 @@ def fixture_report(context: ReportContext) -> str:
                 lines.append(f"- **Beschreibung:** {finding.description}")
             if finding.osv_severity:
                 lines.append(
-                    f"- **Schweregrad-Quelle:** OSV-Datenbank ({finding.severity_source})"
+                    f"- **Schweregrad-Wort laut OSV-Datenbank:** "
+                    f"{finding.osv_severity.value} ({finding.severity_source})"
                 )
-            if finding.cvss_vector:
-                lines.append(f"- **CVSS-Vektor:** {finding.cvss_vector}")
+            vectors = finding.cvss_vectors or (
+                [finding.cvss_vector] if finding.cvss_vector else []
+            )
+            for vector in vectors:
+                lines.append(f"- **CVSS-Vektor:** {vector}")
+            if finding.osv_severity and len(vectors) > 1:
+                lines.append(f"- *{VECTOR_MISMATCH_HINT}*")
             if finding.osv_cwe_ids:
                 lines.append(f"- **CWE (OSV):** {', '.join(finding.osv_cwe_ids)}")
             lines.append(f"- **Hinweis zur Behebung:** {_fix_hint(finding)}")

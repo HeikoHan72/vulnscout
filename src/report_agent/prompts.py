@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.enrichment.display import osv_context_lines
+
 from .models import ReportContext
 
 SYSTEM_PROMPT = """\
@@ -96,12 +98,7 @@ def _render_finding_block(item) -> str:  # FindingWithAssessment, Import-Zyklus 
         block.append(f"Ort: {location}")
     if f.package:
         block.append(f"Paket: {f.package} ({f.installed_version}), Fix: {', '.join(f.fix_versions) or 'unbekannt'}")
-    if f.osv_severity:
-        block.append(
-            f"Schweregrad laut OSV-Datenbank: {f.osv_severity.value} (Quelle: {f.severity_source})"
-        )
-    if f.cvss_vector:
-        block.append(f"CVSS-Vektor: {f.cvss_vector}")
+    block.extend(osv_context_lines(f))
     if f.code_snippet:
         block.append(f"Code:\n```\n{f.code_snippet}\n```")
     block.append(f"Begründung des Triage-Agenten: {a.reasoning}")

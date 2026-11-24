@@ -12,8 +12,10 @@ Design-Entscheidungen:
   `aliases` auf GHSA-Einträge (GitHub Advisory Database), und die liefern
   ihn. Es wird genau ein Sprung gemacht, ohne Rekursion.
 - Kein CVSS-Rechner: Der Schweregrad kommt als Wort aus
-  `database_specific.severity`. Der CVSS-Vektor wird unverändert
-  mitgeführt, damit die Einstufung nachprüfbar bleibt.
+  `database_specific.severity`. Alle gültigen CVSS-Vektoren werden
+  unverändert mitgeführt, damit die Einstufung nachprüfbar bleibt. Das Wort
+  kann zu einem anderen Vektor gehören als dem zuerst genannten (beobachtet:
+  Wort nach Version 4, der Version-3-Vektor ergibt eine niedrigere Stufe).
 - `finding.severity`, `finding.cwe` und `finding.confidence` bleiben
   unangetastet. Das Pre-Filter-Modell nutzt sie als Merkmale (siehe
   `src/prefilter/features.py`); würden sie nachträglich überschrieben,
@@ -157,6 +159,7 @@ class _OsvInfo:
 
     severity: Optional[Severity] = None
     vector: Optional[str] = None
+    vectors: list[str] = field(default_factory=list)
     cwe_ids: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
 
@@ -188,8 +191,11 @@ def _extract(record: dict) -> _OsvInfo:
         for vector_type in _VECTOR_TYPES:
             score = by_type.get(vector_type)
             if isinstance(score, str) and _VECTOR_PATTERN.fullmatch(score):
-                info.vector = score
-                break
+                info.vectors.append(score)
+        # Der bevorzugte Vektor bleibt der erste gültige (Version 3 vor 4
+        # vor 2); alle gültigen stehen in `vectors`.
+        if info.vectors:
+            info.vector = info.vectors[0]
 
     aliases = record.get("aliases")
     if isinstance(aliases, list):
@@ -242,6 +248,7 @@ def _resolve(
         _OsvInfo(
             severity=best.info.severity,
             vector=best.info.vector,
+            vectors=list(best.info.vectors),
             cwe_ids=best.info.cwe_ids,
             aliases=first.aliases,
         ),
@@ -304,8 +311,8 @@ def enrich_findings(
 ) -> None:
     """Reichert die pip-audit-Funde in `findings` an Ort und Stelle an.
 
-    Ändert nur die Felder `osv_severity`, `cvss_vector`, `osv_cwe_ids`,
-    `osv_aliases` und `severity_source`. Wirft nie: Jeder Fehler lässt die
+    Ändert nur die Felder `osv_severity`, `cvss_vector`, `cvss_vectors`,
+    `osv_cwe_ids`, `osv_aliases` und `severity_source`. Wirft nie: Jeder Fehler lässt die
     betroffenen Funde unverändert (siehe Modul-Docstring).
 
     Args:
@@ -388,6 +395,7 @@ def enrich_findings(
                 n_no_data += 1
                 continue
             finding.cvss_vector = result.info.vector
+            finding.cvss_vectors = list(result.info.vectors)
             finding.osv_cwe_ids = list(result.info.cwe_ids)
             finding.osv_aliases = list(result.info.aliases)
             if result.info.severity is not None:

@@ -79,7 +79,13 @@ class Finding(BaseModel):
             `src/enrichment/osv.py`) einen gefunden hat. Steht bewusst in
             einem eigenen Feld: `severity` bleibt der Wert des Scanners, weil
             das Pre-Filter-Modell ihn als Merkmal nutzt.
-        cvss_vector: CVSS-Vektor aus OSV, unverändert übernommen.
+        cvss_vector: Der bevorzugte CVSS-Vektor aus OSV (Version 3, sonst 4,
+            sonst 2), unverändert übernommen. Bleibt für bestehende
+            Auswertungen erhalten; vollständig ist `cvss_vectors`.
+        cvss_vectors: Alle gültigen CVSS-Vektoren des OSV-Eintrags,
+            unverändert und in der Reihenfolge Version 3, 4, 2. Das
+            Schweregrad-Wort (`osv_severity`) kann zu einem anderen Vektor
+            gehören als dem bevorzugten; deshalb werden alle geführt.
         osv_cwe_ids: CWE-Nummern aus OSV. Eigenes Feld aus demselben Grund
             wie `osv_severity` (`cwe` ist ein Merkmal des Pre-Filters).
         osv_aliases: Weitere IDs derselben Schwachstelle laut OSV (z. B.
@@ -113,6 +119,7 @@ class Finding(BaseModel):
 
     osv_severity: Optional[Severity] = None
     cvss_vector: Optional[str] = None
+    cvss_vectors: list[str] = Field(default_factory=list)
     osv_cwe_ids: list[str] = Field(default_factory=list)
     osv_aliases: list[str] = Field(default_factory=list)
     severity_source: Optional[str] = None
