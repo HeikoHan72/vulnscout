@@ -1,13 +1,15 @@
 """Baut den Trainingsdatensatz für das Pre-Filter-Modell (Variante B).
 
 Ablauf:
-1. Scannt jedes konfigurierte Repository mit allen drei Scanner-Tools
-   (Bandit, pip-audit, Semgrep).
-2. Lässt jeden Fund vom Triage-Agenten bewerten, mit deaktiviertem
+1. Prüft vorab, ob ANTHROPIC_API_KEY gesetzt ist und alle Repositories
+   vorhanden sind (sonst Abbruch mit Hinweis, bevor etwas gescannt wird).
+2. Scannt jedes konfigurierte Repository mit allen drei Scanner-Tools
+   (Bandit, pip-audit, Semgrep mit `p/security-audit`).
+3. Lässt jeden Fund vom Triage-Agenten bewerten, mit deaktiviertem
    Consensus-Check (spart die Hälfte der API-Calls bei Funden mit
-   niedriger Konfidenz - für einen Trainingsdatensatz ist das
-   vertretbar, im echten Scan-Betrieb bleibt der Consensus-Check an).
-3. Schreibt pro Fund eine Zeile in eine JSONL-Datei: die Rohmerkmale
+   niedriger Konfidenz - für einen Trainingsdatensatz vertretbar, im
+   echten Scan-Betrieb bleibt der Consensus-Check an).
+4. Schreibt pro Fund eine Zeile in eine JSONL-Datei: die Rohmerkmale
    des Finding plus das Label des Triage-Agenten (is_true_positive).
 
 Wichtig: Die Labels stammen vom LLM, nicht von Menschen. Das Modell,
@@ -16,7 +18,24 @@ Urteil des Triage-Agenten - es lernt nicht unabhängig "echte"
 Schwachstellen zu erkennen. Diese Einschränkung wird in der
 Projekt-Dokumentation offen benannt.
 
-Nutzung:
+Voraussetzungen:
+- `ANTHROPIC_API_KEY` in `.env` (die Labels kosten echte API-Aufrufe).
+- Die fünf externen Repositories liegen als Ordner in einem gemeinsamen
+  Verzeichnis. Standard: `eval_repos/` neben dem Projektordner (also
+  außerhalb dieses Repositories). Anderer Ort: Umgebungsvariable
+  `VULNSCOUT_EVAL_REPOS`. Klon-Befehle gibt das Skript aus, wenn Ordner
+  fehlen (`REPO_SOURCES` unten). Die geklonten Commits sind nicht
+  festgehalten: ein neu geklonter Stand kann vom Stand des mitgelieferten
+  Datensatzes abweichen.
+- Netzwerkzugriff für Semgrep (`p/security-audit` wird aus der
+  Semgrep-Registry geladen).
+
+Hinweis zum mitgelieferten Datensatz: Er entstand in einer Umgebung ohne
+Zugriff auf die Semgrep-Registry, Semgrep lief dort mit einem lokal
+geklonten Regelsatz. Die Semgrep-Regelkennungen im Datensatz stimmen
+deshalb nicht mit den Kennungen eines neuen Laufs überein.
+
+Nutzung (aus dem Projektordner):
     python -m scripts.label_repos
 """
 
@@ -33,28 +52,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Sandbox-Workaround: die in diesem Sandbox-Image installierte semgrep-Version
-# kollidiert mit einer von FastAPI benötigten neueren opentelemetry-Version
-# (ImportError beim Start). Betrifft nur diese Entwicklungsumgebung, nicht das
-# Docker-Image des Projekts (dort sind die Versionen über requirements.txt
-# fest gepinnt und kollisionsfrei). Lösung hier: eine isolierte venv mit
-# kompatiblem semgrep, deren bin-Verzeichnis vor den Rest von PATH gesetzt
-# wird, damit der Unterprozess-Aufruf "semgrep" diese Version findet.
-_SEMGREP_VENV_BIN = "/tmp/semgrep_venv/bin"
-if os.path.isdir(_SEMGREP_VENV_BIN):
-    os.environ["PATH"] = _SEMGREP_VENV_BIN + os.pathsep + os.environ.get("PATH", "")
-
-# Zweiter Sandbox-Workaround: semgrep.dev (Registry für "p/security-audit")
-# ist für diese Entwicklungsumgebung gesperrt. Fallback auf ein lokal
-# geklontes Regelwerk (semgrep/semgrep-rules von GitHub, nur die
-# "security"-Unterordner je Python-Framework + generic/secrets) - das
-# Scanner-Modul sieht genau diesen Fall vor ("für einen Lauf ganz ohne
-# Netzwerk kann hier der Pfad zu einer eigenen Regel-Datei übergeben
-# werden", siehe run_semgrep-Docstring). Im Docker-Image des Projekts
-# bleibt "p/security-audit" der Standard, dort funktioniert der
-# Registry-Zugriff.
-_LOCAL_SEMGREP_CONFIG = "/home/claude/semgrep_security_rules"
-
 from src.prefilter.features import finding_to_features
 from src.scanner_agent.scanner import run_all_scanners
 from src.triage_agent.triage import triage_findings
@@ -62,24 +59,105 @@ from src.triage_agent.triage import triage_findings
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-# Repo-Name -> Pfad. Das Repo-Label wird im Datensatz mitgeführt, damit
-# der Train/Test-Split später repo-weise (nicht zeilenweise) passiert -
-# sonst würden Zeilen desselben Repos auf beiden Seiten landen und die
-# Evaluierung des Modells wäre zu optimistisch (Datenleckage).
-REPOS: dict[str, Path] = {
-    "dummy_vuln_repo": Path("test_repos/dummy_vuln_repo"),
-    "pygoat": Path("/home/claude/eval_repos/pygoat"),
-    "dvpwa": Path("/home/claude/eval_repos/dvpwa"),
-    "vulnerable_flask_app": Path("/home/claude/eval_repos/Vulnerable-Flask-App"),
-    "requests": Path("/home/claude/eval_repos/requests"),
-    "click": Path("/home/claude/eval_repos/click"),
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Umgebungsvariable für den Ordner mit den externen Repositories.
+EVAL_REPOS_ENV = "VULNSCOUT_EVAL_REPOS"
+
+# Name im Datensatz -> (Ordnername unter dem Eval-Verzeichnis, Klon-URL).
+# Geklont wurde mit `git clone --depth 1`. Das Repo-Label wird im
+# Datensatz mitgeführt, damit der Train/Test-Split später repo-weise
+# (nicht zeilenweise) passiert - sonst würden Zeilen desselben Repos auf
+# beiden Seiten landen und die Evaluierung des Modells wäre zu
+# optimistisch (Datenleckage).
+REPO_SOURCES: dict[str, tuple[str, str]] = {
+    "pygoat": ("pygoat", "https://github.com/adeyosemanputra/pygoat.git"),
+    "dvpwa": ("dvpwa", "https://github.com/anxolerd/dvpwa.git"),
+    "vulnerable_flask_app": (
+        "Vulnerable-Flask-App",
+        "https://github.com/we45/Vulnerable-Flask-App.git",
+    ),
+    "requests": ("requests", "https://github.com/psf/requests.git"),
+    "click": ("click", "https://github.com/pallets/click.git"),
 }
 
-OUTPUT_PATH = Path("scripts/training_data.jsonl")
+# Das eigene Dummy-Repo gehört zum Projekt und braucht keinen Klon.
+DUMMY_REPO_NAME = "dummy_vuln_repo"
+DUMMY_REPO_PATH = _PROJECT_ROOT / "test_repos" / "dummy_vuln_repo"
+
+OUTPUT_PATH = _PROJECT_ROOT / "scripts" / "training_data.jsonl"
 
 # Consensus-Check deaktivieren: ein negativer Schwellenwert wird von
 # keiner Konfidenz (0-1) unterschritten.
 DISABLE_CONSENSUS_THRESHOLD = -1.0
+
+
+def default_eval_dir() -> Path:
+    """Ordner mit den externen Repos: `VULNSCOUT_EVAL_REPOS` oder
+    `eval_repos/` neben dem Projektordner."""
+    configured = os.environ.get(EVAL_REPOS_ENV, "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return _PROJECT_ROOT.parent / "eval_repos"
+
+
+def resolve_repos(eval_dir: Path) -> dict[str, Path]:
+    """Repo-Name -> Pfad für alle Repos des Datensatzes."""
+    repos: dict[str, Path] = {DUMMY_REPO_NAME: DUMMY_REPO_PATH}
+    for name, (folder, _url) in REPO_SOURCES.items():
+        repos[name] = eval_dir / folder
+    return repos
+
+
+def missing_repos(repos: dict[str, Path]) -> list[str]:
+    """Namen der Repos, deren Ordner nicht existiert."""
+    return [name for name, path in repos.items() if not path.is_dir()]
+
+
+def clone_commands(missing: list[str], eval_dir: Path) -> list[str]:
+    """Klon-Befehle für die fehlenden externen Repos."""
+    commands = []
+    for name in missing:
+        if name not in REPO_SOURCES:
+            continue
+        folder, url = REPO_SOURCES[name]
+        commands.append(f'git clone --depth 1 {url} "{eval_dir / folder}"')
+    return commands
+
+
+def api_key_problem() -> str | None:
+    """Fehlertext, falls kein API-Key gesetzt ist, sonst None.
+
+    Ohne Key lässt sich der Client zwar erzeugen, der erste Aufruf
+    scheitert aber mit einem Programmierfehler (TypeError), der bewusst
+    nicht wiederholt wird - das Skript bräche erst nach dem ersten
+    Scan ab.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        return None
+    return (
+        "ANTHROPIC_API_KEY ist nicht gesetzt. Das Labeling braucht echte "
+        "API-Aufrufe; Key in .env eintragen (Vorlage: .env.example)."
+    )
+
+
+def preflight(eval_dir: Path) -> list[str]:
+    """Alle Voraussetzungen prüfen. Gibt die Fehlermeldungen zurück
+    (leer = alles in Ordnung)."""
+    problems: list[str] = []
+    key_problem = api_key_problem()
+    if key_problem:
+        problems.append(key_problem)
+
+    missing = missing_repos(resolve_repos(eval_dir))
+    if missing:
+        problems.append(
+            f"Repositories fehlen unter {eval_dir}: {', '.join(missing)}. "
+            f"Klonen mit:\n  "
+            + "\n  ".join(clone_commands(missing, eval_dir))
+            + f"\nOder Ordner über {EVAL_REPOS_ENV} angeben."
+        )
+    return problems
 
 
 def _finding_to_record(finding, assessment, repo_name: str) -> dict:
@@ -127,7 +205,16 @@ def _write_records(records: list[dict]) -> None:
         f.flush()
 
 
-def main() -> None:
+def main() -> int:
+    eval_dir = default_eval_dir()
+    problems = preflight(eval_dir)
+    if problems:
+        for problem in problems:
+            logger.error(problem)
+        return 1
+
+    repos = resolve_repos(eval_dir)
+
     # Fortsetzen statt neu starten: bereits erledigte Funde (nach
     # finding_id) werden übersprungen, falls das Skript nach einem
     # Abbruch erneut gestartet wird.
@@ -142,16 +229,9 @@ def main() -> None:
 
     totals = {"findings": 0, "scan_errors": 0, "written": 0}
 
-    for repo_name, repo_path in REPOS.items():
-        if not repo_path.exists():
-            logger.error("Repo-Pfad fehlt, übersprungen: %s (%s)", repo_name, repo_path)
-            continue
-
+    for repo_name, repo_path in repos.items():
         logger.info("Scanne %s (%s) ...", repo_name, repo_path)
-        semgrep_config = (
-            _LOCAL_SEMGREP_CONFIG if Path(_LOCAL_SEMGREP_CONFIG).is_dir() else "p/security-audit"
-        )
-        scan_result = run_all_scanners(repo_path, semgrep_config=semgrep_config)
+        scan_result = run_all_scanners(repo_path)
         if scan_result.errors:
             logger.warning("Scanner-Fehler in %s: %s", repo_name, scan_result.errors)
             totals["scan_errors"] += len(scan_result.errors)
@@ -207,6 +287,7 @@ def main() -> None:
         totals["findings"],
         totals["scan_errors"],
     )
+    return 0
 
 
 if __name__ == "__main__":
