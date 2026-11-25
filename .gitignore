@@ -34,3 +34,6 @@ pip_freeze.txt
 
 # OS
 .DS_Store
+
+# DVC (nicht mehr verwendet, Daten liegen direkt im Repository)
+.dvc/
