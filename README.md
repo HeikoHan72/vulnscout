@@ -35,6 +35,43 @@ Das Training nutzt den mitgelieferten Datensatz `scripts/training_data.jsonl` (3
 
 After cloning, the MLflow registry holds no model yet. VulnScout still runs without one but sends every finding to the LLM triage. To train it, run the commands above in a second terminal while `docker compose up` is running. Training uses the bundled dataset `scripts/training_data.jsonl` (3,004 findings, 1.4 MB), needs no API key and registers the champion in the MLflow registry. The API process loads the model on the first scan and remembers a missing model until restart, hence the `restart`.
 
+## Online-Demo / Online demo
+
+**URL:** https://vulnscout-0i2g.onrender.com/docs (Swagger-Oberfläche der API)
+
+Die Demo läuft auf Render (kostenlose Stufe, Region Frankfurt) aus demselben Code und demselben Dockerfile wie der lokale Stack. Sie läuft **ausschließlich im Demo-Modus**: Die Scanner (Bandit, pip-audit, Semgrep) und die OSV-Anreicherung laufen echt, Triage und Bericht kommen aber aus Fixtures, nicht von Claude. Pre-Filter und MLflow Registry werden nicht angesprochen. Den vollständigen Ablauf mit LLM-Triage, Pre-Filter, Prometheus und Grafana gibt es nur lokal mit `docker compose up` (siehe Quickstart). Gründe: Auf einer öffentlichen URL ohne Authentifizierung soll kein API-Key liegen, und die kostenlose Stufe (512 MB RAM, 0,1 CPU, kein privates Netzwerk für eingehende Verbindungen) trägt den Compose-Stack nicht.
+
+So probierst du es aus: `POST /scans` aufklappen, **Try it out**, dann diesen Request senden:
+
+```json
+{
+  "repo_path": "/app/test_repos/dummy_vuln_repo",
+  "demo_mode": true
+}
+```
+
+Oder per Kommandozeile:
+
+```bash
+curl -X POST https://vulnscout-0i2g.onrender.com/scans \
+  -H "Content-Type: application/json" \
+  -d '{"repo_path": "/app/test_repos/dummy_vuln_repo", "demo_mode": true}'
+```
+
+Zu wissen:
+- Nach 15 Minuten ohne Aufruf schläft der Dienst ein; der erste Aufruf danach braucht rund eine Minute.
+- Ein Scan läuft synchron und dauert hier rund zwei Minuten (ein Lauf gemessen). Die Anfrage nicht wiederholen, bevor die Antwort da ist.
+- Es lassen sich nur die mitgelieferten Beispiel-Repos unter `/app/test_repos` scannen.
+- Die Datenbank ist nicht dauerhaft; Scan-Ergebnisse gehen beim Neustart des Dienstes verloren.
+- Die Beschreibung oben in der Swagger-Oberfläche erwähnt die LLM-Bewertung; in der Demo gilt sie nicht. Der Bericht kennzeichnet sich selbst als Demo-Modus.
+- Die Verfügbarkeit ist nicht garantiert (kostenlose Stufe).
+
+The demo runs on Render (free tier, Frankfurt region) from the same code and Dockerfile as the local stack. It runs **in demo mode only**: the scanners (Bandit, pip-audit, Semgrep) and the OSV enrichment run for real, but triage and report come from fixtures, not from Claude. The pre-filter and the MLflow registry are not used. The full pipeline with LLM triage, pre-filter, Prometheus and Grafana runs locally only via `docker compose up` (see Quickstart). Reasons: no API key should sit on a public URL without authentication, and the free tier (512 MB RAM, 0.1 CPU, no inbound private networking) cannot carry the compose stack.
+
+To try it, expand `POST /scans`, click **Try it out** and send the request above, or use the `curl` command above.
+
+Good to know: the service sleeps after 15 minutes of inactivity and the first call afterwards takes about a minute; a scan is synchronous and takes about two minutes here (one run measured), so do not resend before the response arrives; only the bundled example repos under `/app/test_repos` can be scanned; the database is not persistent and scan results are lost when the service restarts; the description at the top of the Swagger page mentions LLM triage, which does not apply in the demo (the report labels itself as demo mode); availability is not guaranteed (free tier).
+
 ## Architektur / Architecture
 
 ```
@@ -148,6 +185,7 @@ Zusätzlich wurden 6 Repositories (die vier oben plus `requests` und `click`) vo
 - **Externe Dienste:** An die Anthropic-API gehen die Funde samt Code-Ausschnitten (nur im LLM-Modus, nicht im Demo-Modus). An OSV.dev gehen die Schwachstellen-IDs der Abhängigkeits-Funde; die Anreicherung ist über `VULNSCOUT_OSV_ENABLED` abschaltbar.
 - **Prompt-Injection:** Code aus dem gescannten Repository landet im Prompt der LLM-Triage. Gezielte Tests dazu wurden nicht durchgeführt.
 - **Geheimnisse:** Der API-Schlüssel gehört nur in die lokale `.env` (nicht im Repository, nur `.env.example`).
+- **Öffentliche Demo:** Die Online-Demo ist ohne Anmeldung erreichbar; jeder mit der URL kann Scans der Beispiel-Repos starten. Sie enthält keinen API-Key und läuft im Demo-Modus. / The online demo is reachable without login; anyone with the URL can start scans of the example repos. It holds no API key and runs in demo mode.
 
 ## Limitations
 
@@ -163,6 +201,7 @@ Zusätzlich wurden 6 Repositories (die vier oben plus `requests` und `click`) vo
 - **Kein Alertmanager:** Die 7 Prometheus-Alarmregeln werden ausgewertet, aber nicht versendet – nur in der Prometheus-Oberfläche sichtbar.
 - **Kein asynchrones Scanning:** `POST /scans` läuft synchron, ein Scan pro Request.
 - **Bekannte API-Einschränkung:** Bei Fehlschlag von `POST /scans` fehlt die Lauf-ID in der Fehlerantwort.
+- **Die Online-Demo zeigt nicht die KI-Qualität:** Sie läuft im Demo-Modus (Fixture-Triage, kein Pre-Filter, keine MLflow Registry). Die Kennzahlen in diesem README stammen aus lokalen Läufen mit Anthropic-Key. / The online demo does not show the AI quality: it runs in demo mode (fixture triage, no pre-filter, no MLflow registry). The figures in this README come from local runs with an Anthropic key.
 
 *English summary: scanner coverage is incomplete (3 of 17 known vulnerabilities were never flagged by Bandit/Semgrep, because both are pattern-based rather than taint-analysis tools; a broader ruleset or a taint-analysis tool such as Semgrep Pro or CodeQL would address this but was out of scope given the project timeline); LLM triage is non-deterministic and confirmed 2-3 false positives per run (precision 90.6-93.5% on code findings over three runs); the pre-filter model is a distillation of LLM judgment, not independent ground truth, so it inherits any systematic LLM bias; its 91.2% coverage on held-out repos was not independently validated and drops to 1.6% in live runs on the dummy repo; its training data (3,004 findings, 6 repos) is Python-only; behind a proxy pip-audit reports a scanner error and returns no dependency findings; tested on Linux only; no Alertmanager wiring; scanning is synchronous; a failed `POST /scans` doesn't return a run id.*
 
