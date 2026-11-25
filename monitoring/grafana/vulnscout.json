@@ -524,7 +524,7 @@
     {
       "id": 16,
       "type": "stat",
-      "title": "Eingesparte LLM-Aufrufe (gesamt)",
+      "title": "Eingesparte LLM-Aufrufe (gesamt, geschätzt)",
       "description": "Kumulierte Anzahl der Funde, die das Pre-Filter-Modell ohne LLM-Aufruf entschieden hat - die Kostenersparnis-Kennzahl",
       "datasource": {
         "type": "prometheus",
