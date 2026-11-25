@@ -1,6 +1,6 @@
 # VulnScout
 
-**Status: in Entwicklung (Abschlussprojekt Modul 6 – AI Engineer Lehrgang, MLOps & Deployment)**
+**Status: Abschlussprojekt Modul 6 – AI Engineer Lehrgang, MLOps & Deployment (Stand 25.11.2026)**
 
 Multi-Agenten-System, das Code-Repositories automatisch auf Sicherheitslücken scannt, die Funde mit einem LLM bewertet (Fehlalarme filtert, Schweregrad einstuft) und einen lesbaren Bericht mit Fix-Vorschlägen erstellt.
 
@@ -13,6 +13,8 @@ cp .env.example .env
 # ANTHROPIC_API_KEY in .env eintragen (optional, siehe Demo-Modus unten)
 docker compose up
 ```
+
+Voraussetzungen / Requirements: Docker mit Docker Compose und Internetzugang (pip-audit, das Semgrep-Regelwerk `p/security-audit` und die OSV-Anreicherung greifen auf das Netz zu). Getestet unter Linux; Windows und macOS sind nicht getestet. / Docker with Docker Compose and internet access (pip-audit, the Semgrep ruleset `p/security-audit` and the OSV enrichment use the network). Tested on Linux only.
 
 API-Doku / API docs: http://localhost:8000/docs
 
@@ -36,11 +38,14 @@ After cloning, the MLflow registry holds no model yet. VulnScout still runs with
 ## Architektur / Architecture
 
 ```
-Zielrepo → Scanner-Agent (Bandit, pip-audit, Semgrep)
+Zielrepo → Scanner-Agent (Bandit, pip-audit, Semgrep; doppelte pip-audit-Funde werden zusammengeführt)
+         → OSV-Anreicherung (api.osv.dev: Schweregrad-Angabe, CVSS-Vektoren, CWE für
+           Abhängigkeits-Funde – abschaltbar, bei Ausfall unverändert weiter)
          → Pre-Filter (ML-Modell aus MLflow Model Registry: entscheidet eindeutige
            Funde ohne LLM-Aufruf, Rest geht weiter – Kostenersparnis, siehe unten)
          → Triage-Agent (LLM: Fehlalarm-Filter, Schweregrad, Consensus bei Unsicherheit)
            [ohne API-Key: Demo-/Fixture-Modus statt LLM]
+         → Schweregrad-Untergrenze (bestätigte Abhängigkeits-Funde mindestens auf der OSV-Stufe)
          → Report-Agent (LLM: Bericht + Fix-Vorschläge)
            [ohne API-Key: Demo-/Fixture-Modus statt LLM]
          → Orchestrator (SQLite-Persistenz je Schritt, crash-resilient)
@@ -61,7 +66,7 @@ Details: [docs/architecture.md](docs/architecture.md)
 | Prometheus | http://localhost:9090 | Kennzahlen abfragen, Alarmregeln prüfen |
 | Grafana | http://localhost:3000 | Dashboard (ohne Anmeldung) |
 
-Erfasst werden die vier goldenen Signale (Verkehr, Fehler, Latenz, Sättigung) sowie fachliche Kennzahlen: Scans nach Ergebnis und Dauer, Funde je Scanner, Scanner-Ausfälle, Triage-Ergebnisse (bestätigt, Fehlalarm, kein Konsens), Verteilung der Triage-Konfidenz, Latenz und Fehler des Sprachmodells, sowie Pre-Filter-Entscheidungen (automatisch bestätigt/verworfen, eskaliert, eingesparte LLM-Aufrufe). Alarmregeln liegen in [`monitoring/alerts.yml`](monitoring/alerts.yml).
+Erfasst werden die vier goldenen Signale (Verkehr, Fehler, Latenz, Sättigung) sowie fachliche Kennzahlen: Scans nach Ergebnis und Dauer, Funde je Scanner, Scanner-Ausfälle, Triage-Ergebnisse (bestätigt, Fehlalarm, kein Konsens), Verteilung der Triage-Konfidenz, Latenz und Fehler des Sprachmodells, Pre-Filter-Entscheidungen (automatisch bestätigt/verworfen, eskaliert, eingesparte LLM-Aufrufe), OSV-Anreicherung (`vulnscout_osv_enrichment_total`) und Schweregrad-Untergrenze (`vulnscout_severity_floor_total`). Die beiden letzten sind unter `/metrics` und in Prometheus abrufbar, aber im Grafana-Dashboard nicht dargestellt. Alarmregeln liegen in [`monitoring/alerts.yml`](monitoring/alerts.yml).
 
 Besonders relevant ist der Alarm `ScannerFaelltAus`: Ein ausgefallenes Scanner-Werkzeug liefert keine Funde – im Bericht sieht das aus wie eine saubere Codebasis. Das Monitoring macht den Unterschied sichtbar.
 
@@ -75,26 +80,31 @@ Nicht jeder Scanner-Fund braucht einen LLM-Aufruf: Ein von pip-audit gemeldetes 
 
 **Wichtig, offen benannt:** Die Trainingslabels stammen vom Triage-Agenten (LLM) selbst, nicht von menschlicher Ground Truth – das Modell destilliert also das LLM-Urteil, es lernt nicht unabhängig "echte" Schwachstellen zu erkennen. Die unten berichtete Fehlerrate ist eine Abweichung vom LLM-Urteil, keine Abweichung von der Wahrheit.
 
-Trainiert auf 3004 realen Scanner-Funden aus 6 Repositories (4 bewusst verwundbare: eigenes Dummy-Repo, OWASP PyGoat, Vulnerable Flask App, DVPWA; 2 saubere Open-Source-Bibliotheken als Negativbeispiele: `requests`, `click`). `Vulnerable-Flask-App` und `click` wurden beim Training nie gesehen (repo-weiser Split, Testdaten).
+Der Datensatz umfasst 3.004 reale Scanner-Funde aus 6 Repositories (4 bewusst verwundbare: eigenes Dummy-Repo, OWASP PyGoat, Vulnerable Flask App, DVPWA; 2 weit verbreitete Open-Source-Bibliotheken als Negativbeispiele: `requests`, `click`). Davon dienen 1.402 Funde dem Training und 1.602 dem Test. `Vulnerable-Flask-App` und `click` wurden beim Training nie gesehen (repo-weiser Split, Testdaten). Das eigene Dummy-Repo gehört zu den Trainingsdaten und ist zugleich das Repo der Live-Auswertung unten.
 
 Der Trainingsdatensatz (`scripts/training_data.jsonl`, 1,4 MB) liegt direkt im Repository, damit jeder das Modell ohne API-Kosten selbst trainieren kann (Anleitung im Schnellstart). Zum reinen Ausführen von VulnScout wird er nicht gebraucht – nur zum Trainieren des Pre-Filter-Modells.
 
 | Kennzahl | Wert |
 |---|---|
 | Champion-Modell | Random Forest (Challenger: Logistic Regression) |
-| Abdeckung auf Test-Repos (automatisch entschieden, kein LLM-Aufruf) | **96,4 %** |
-| Fehlerrate ggü. LLM-Urteil (bei den automatisch entschiedenen Funden) | 0,13 % |
+| Abdeckung auf den Test-Repos (automatisch entschieden, kein LLM-Aufruf) | **91,2 %** (1.461 von 1.602 Funden) |
+| Abweichung vom LLM-Urteil bei den automatisch entschiedenen Funden | 0 von 1.461 (0,00 %); obere 95-%-Grenze nach der Dreierregel etwa 0,2 % |
 | Qualitäts-Gate | < 2 % Fehlerrate – bestanden |
-| Trainingsdaten / Testdaten | 1402 / 1602 Zeilen |
+| Trainingsdaten / Testdaten | 1.402 / 1.602 Zeilen |
+| Test-Repos | `click`, `vulnerable_flask_app` |
+| Abdeckung im Live-Lauf auf dem Dummy-Repo (3 Läufe, 186 Funde) | **1,6 %** (3 Funde) |
 
-96,4 % der Funde auf den beiden nie gesehenen Test-Repos wurden ohne jeden LLM-Aufruf korrekt entschieden – nur die restlichen ~3,6 % (die unklaren Fälle) gingen an die Triage. Bei einer gemessenen Kostenbasis von ca. 0,004 $ pro LLM-bewertetem Fund bedeutet das für einen Lauf mit z. B. 1000 Funden: statt ~4 $ für die volle LLM-Triage nur noch ~0,15 $ für die eskalierten Fälle.
+91,2 % der Funde auf den beiden nie gesehenen Test-Repos wurden ohne LLM-Aufruf entschieden (alle als Fehlalarm verworfen), ohne dass eine dieser Entscheidungen vom LLM-Urteil abwich. Die übrigen 8,8 % gingen an die Triage. Das gilt für dieses Test-Set und gemessen am LLM-Urteil, nicht an unabhängiger Ground Truth.
 
-96.4% of findings on the two held-out test repos were decided correctly without any LLM call - only the remaining ~3.6% (the genuinely unclear cases) were escalated to the triage agent.
+**Im Live-Betrieb ist die Abdeckung deutlich niedriger:** Beim echten Lauf auf `dummy_vuln_repo` (Container, drei Läufe) wurden nur 3 von 186 Funden (1,6 %) automatisch entschieden. Der Hauptgrund: pip-audit-Funde haben keinen Scanner-Schweregrad und gehen per Regel immer an das LLM (78 von 186 Funden). Die Kostenersparnis im Live-Betrieb ist damit klein; eine belastbare Aussage dazu steht aus. Die Abdeckung auf dem Test-Set (91,2 %) und die Live-Abdeckung (1,6 %) haben unterschiedliche Datenbasen und sind nicht vergleichbar.
+
+91.2% of findings on the two held-out test repos were decided without any LLM call (all rejected as false positives), with no deviation from the LLM verdict. This is measured against LLM labels, not independent ground truth. In live runs on the dummy repo only 3 of 186 findings (1.6%) were decided automatically, because dependency findings carry no scanner severity and always go to the LLM; the cost saving in live use is therefore small.
 
 ## Tech-Stack
 
 - Scanning: Bandit, pip-audit, Semgrep
-- LLM: Anthropic SDK (Claude Sonnet 5), strukturierte Ausgabe über Tool-Use
+- LLM: Anthropic SDK (Claude Sonnet 5.5, `claude-sonnet-5-5` als Standard, per `ANTHROPIC_MODEL` änderbar), strukturierte Ausgabe über Tool-Use
+- Anreicherung: OSV.dev (Schweregrad-Angabe, CVSS-Vektoren, CWE)
 - Pre-Filter-Modell: scikit-learn (Logistic Regression / Random Forest), MLflow Model Registry (Champion/Challenger)
 - API: FastAPI
 - Tracking: MLflow (Experiment-Tracking + Model Registry)
@@ -112,35 +122,59 @@ Getestet an:
 - DVPWA
 - eigenem Dummy-Repo mit bekannter Ground Truth (`test_repos/dummy_vuln_repo`) – deckt u. a. SQL-Injection, Command Injection, Code Injection (eval/exec), SSTI, SSRF, XXE, Insecure Deserialization, Path Traversal, schwache Kryptografie, unsicheren Zufall, unsicheres YAML-Laden und verwundbare Dependencies ab, inklusive bewusst mehrdeutiger Fälle (z. B. `shell=True` mit hartcodiertem statt benutzergesteuertem Befehl) zum Testen des Triage-Consensus-Mechanismus
 
-**Precision/Recall gegen echte Ground Truth** (`test_repos/dummy_vuln_repo/ground_truth.yml`, 17 bekannte Schwachstellenklassen + mehrdeutige Fälle + sichere Gegenbeispiele), gemessen mit `scripts/evaluate.py` an einem echten Lauf (Scanner → Pre-Filter → LLM-Triage, kein Demo-Modus). Zuordnung Fund → Ground-Truth-Eintrag über den Syntaxbaum, robust gegen Zeilenverschiebungen.
+**Precision/Recall gegen echte Ground Truth** (`test_repos/dummy_vuln_repo/ground_truth.yml`, 17 bekannte Schwachstellenklassen + mehrdeutige Fälle + sichere Gegenbeispiele), gemessen mit `scripts/evaluate.py` an drei echten Läufen vom 24.11.2026 (Scanner → Pre-Filter → LLM-Triage, kein Demo-Modus). Jeder Lauf hatte 62 Funde (Bandit 21, pip-audit 26, Semgrep 15) und dauerte 151 bis 160 Sekunden. Zuordnung Fund → Ground-Truth-Eintrag über den Syntaxbaum, robust gegen Zeilenverschiebungen.
 
 | Bereich | Precision | Recall | F1 | richtig bestätigt | fälschlich bestätigt | richtig verworfen |
 |---|---|---|---|---|---|---|
-| Code-Funde | 91,9 % | 100 % | 95,8 % | 34 | 3 | 5 |
-| Abhängigkeiten (pip-audit) | 100 % | 100 % | 100 % | 51 | 0 | 0 |
+| Code-Funde (Mittel der 3 Läufe, Spanne) | 92,5 % (90,6–93,5) | 98,9 % (96,6–100) | 95,6 % (94,9–96,7) | 28–29 | 2–3 | 3–5 |
 
-Precision/Recall against real ground truth, measured end-to-end (scanners → pre-filter → LLM triage, real LLM calls, no demo mode). Reproducible with `python scripts/evaluate.py --db vulnscout.db` after a real run against `test_repos/dummy_vuln_repo`.
+Dazu je Lauf 0 bis 1 fälschlich verworfener Fund und 0 bis 1 zur Prüfung offener Fund. Die Zahlen streuen, weil die LLM-Triage nicht deterministisch ist.
 
-Zusätzlich wurden 6 Repositories (die vier oben plus `requests` und `click`) vollständig gescannt und von der LLM-Triage bewertet – **3.004 Funde**, als Trainingsdatensatz für das Pre-Filter-Modell (`scripts/training_data.jsonl`, siehe oben). Hier gilt die LLM-Bewertung selbst als Zielgröße, nicht als unabhängige Ground Truth – die Distillation lernt, was das LLM sagen würde, nicht was objektiv wahr ist.
+**Abhängigkeiten (pip-audit):** 26 eindeutige Funde (pip-audit liefert jede Schwachstelle doppelt, 51 Einträge; gleiche Paket-Version-ID-Kombinationen werden zusammengeführt). In allen drei Läufen wurden alle 26 bestätigt. Diese Kennzahl misst nur, dass nichts verworfen wurde, und ist kein Qualitätsbeleg. Aussagekräftiger ist der Vergleich der Einstufung mit der OSV-Angabe: 26 von 26 stimmen überein (Übereinstimmung mit der Datenbank, kein Nachweis der Ausnutzbarkeit). Die Schweregrad-Untergrenze hat in diesen Läufen nichts angehoben (0 Anhebungen); ihre Wirkung im Live-Betrieb ist daher nicht belegt, sie ist durch Tests abgesichert.
+
+Precision/recall against real ground truth, measured end-to-end (scanners → pre-filter → LLM triage, real LLM calls, no demo mode) over three runs on 24 Nov 2026 (62 findings per run). Reproducible after a real run against `test_repos/dummy_vuln_repo`:
+
+```bash
+docker compose cp api:/app/data/vulnscout.db ./lauf.db
+python scripts/evaluate.py --db lauf.db --repo test_repos/dummy_vuln_repo
+```
+
+Zusätzlich wurden 6 Repositories (die vier oben plus `requests` und `click`) vollständig gescannt und von der LLM-Triage bewertet – **3.004 Funde**, als Datensatz für das Pre-Filter-Modell (`scripts/training_data.jsonl`, siehe oben). Hier gilt die LLM-Bewertung selbst als Zielgröße, nicht als unabhängige Ground Truth – die Distillation lernt, was das LLM sagen würde, nicht was objektiv wahr ist.
+
+## Sicherheit / Security notes
+
+- **Keine Authentifizierung:** Die API hat keine Anmeldung und ist im Compose-Stack nur an `127.0.0.1` gebunden. Sie ist nicht für den Betrieb in einem offenen Netz gedacht. Scanbare Pfade sind auf `VULNSCOUT_SCAN_ROOT` begrenzt (im Container `/app/test_repos`).
+- **Scanner-Prozesse** bekommen nur eine minimale Umgebung (`PATH`, `HOME`, Locale, `TMPDIR`); der API-Schlüssel gehört nicht dazu.
+- **Externe Dienste:** An die Anthropic-API gehen die Funde samt Code-Ausschnitten (nur im LLM-Modus, nicht im Demo-Modus). An OSV.dev gehen die Schwachstellen-IDs der Abhängigkeits-Funde; die Anreicherung ist über `VULNSCOUT_OSV_ENABLED` abschaltbar.
+- **Prompt-Injection:** Code aus dem gescannten Repository landet im Prompt der LLM-Triage. Gezielte Tests dazu wurden nicht durchgeführt.
+- **Geheimnisse:** Der API-Schlüssel gehört nur in die lokale `.env` (nicht im Repository, nur `.env.example`).
 
 ## Limitations
 
 - **Scanner-Abdeckung ist unvollständig:** Von 17 bekannten Schwachstellen im Ground-Truth-Repo haben Bandit und Semgrep (Regelwerk `p/security-audit`) 3 nie gemeldet – Path Traversal, SSRF und ein hartcodiertes Secret in der Config. Die LLM-Triage bewertet nur, was mindestens ein Scanner findet; sie meldet nichts selbst. **Ursache:** Beide Scanner arbeiten musterbasiert, nicht mit Datenfluss-/Taint-Analyse – SSRF und Path Traversal erfordern aber, Benutzereingaben über mehrere Zeilen bis zum gefährlichen Aufruf zu verfolgen. **Mögliche Abhilfe (nicht umgesetzt, Zeitrahmen des Projekts):** breiteres Semgrep-Regelwerk (z. B. `p/owasp-top-ten`) oder ein Tool mit echter Taint-Analyse (Semgrep Pro, CodeQL) ergänzen.
-- **LLM-Triage ist nicht fehlerfrei:** 3 von 8 bewusst mehrdeutigen Fällen (z. B. harmloses `shell=True` ohne Benutzereingabe) wurden fälschlich als echte Schwachstelle bestätigt – daher 91,9 % statt 100 % Precision bei Code-Funden.
+- **LLM-Triage ist nicht fehlerfrei und nicht deterministisch:** In den drei Läufen wurden 2 bis 3 Code-Funde fälschlich bestätigt (z. B. harmloses `shell=True` ohne Benutzereingabe); Precision 90,6 bis 93,5 %, Recall 96,6 bis 100 %. Ein Temperatur-Parameter wird nicht gesetzt, die Ergebnisse streuen von Lauf zu Lauf. Drei Läufe sind eine kleine Stichprobe.
 - **Pre-Filter-Modell ist Distillation, keine unabhängige Verifikation:** Es lernt, die LLM-Bewertung vorherzusagen, nicht die Wahrheit selbst. Ein systematischer Fehler der LLM-Triage würde vom Pre-Filter übernommen statt korrigiert.
+- **Pre-Filter: Zahlen nicht unabhängig geprüft:** Die Abdeckung von 91,2 % und die Abweichung von 0 gelten gegenüber dem LLM-Urteil auf zwei Test-Repos. Klassenverteilung im Test-Set, einfache Vergleichsmodelle (Baselines) und mögliche Überschneidungen zwischen Training und Test wurden nicht untersucht. Im Live-Lauf lag die Abdeckung bei 1,6 %, und das Dummy-Repo steckt im Trainingsdatensatz.
+- **Semgrep-Regelkennungen im Training weichen ab:** Die 214 Semgrep-Zeilen im Datensatz stammen von einem lokal geklonten Regelwerk, im Betrieb liefert `p/security-audit` andere Kennungen. Auf 23 ausgehaltenen Semgrep-Zeilen traf der Pre-Filter dadurch keine automatische Entscheidung; das ist nur eine kleine Stichprobe, geprüft für das Champion-Modell.
 - **Trainingsdatensatz für den Pre-Filter ist klein und Python-only:** 3.004 Funde aus 6 Repositories, ausschließlich Python. Für andere Sprachen oder stark abweichende Codebasen ist keine Aussage über die Pre-Filter-Qualität möglich.
 - **Das Pre-Filter-Modell ist nicht im Repository:** Es entsteht erst durch das Training (Schnellstart) und liegt dann in der MLflow Registry des eigenen Compose-Stacks. Ohne trainiertes Modell läuft VulnScout im Rückfallbetrieb: Jeder Fund geht an die LLM-Triage, die Kostenersparnis entfällt. Der API-Prozess lädt das Modell beim ersten Scan; wurde danach trainiert, ist ein `docker compose restart api` nötig.
+- **Hinter einem Proxy** fehlen die Proxy-Variablen in den Scanner-Prozessen: pip-audit meldet dann einen Scanner-Fehler (sichtbar im Bericht, in der Datenbank und in der Metrik `vulnscout_scanner_errors_total`) und liefert keine Abhängigkeits-Funde; Bandit und Semgrep laufen weiter. Nicht getestet unter Windows und macOS.
+- **Schweregrad-Untergrenze live ungeprüft:** Sie hat in den drei Live-Läufen nichts angehoben; ihre Wirkung ist nur durch Tests belegt.
 - **Kein Alertmanager:** Die 7 Prometheus-Alarmregeln werden ausgewertet, aber nicht versendet – nur in der Prometheus-Oberfläche sichtbar.
 - **Kein asynchrones Scanning:** `POST /scans` läuft synchron, ein Scan pro Request.
 - **Bekannte API-Einschränkung:** Bei Fehlschlag von `POST /scans` fehlt die Lauf-ID in der Fehlerantwort.
 
-*English summary: scanner coverage is incomplete (3 of 17 known vulnerabilities were never flagged by Bandit/Semgrep, because both are pattern-based rather than taint-analysis tools; a broader ruleset or a taint-analysis tool such as Semgrep Pro or CodeQL would address this but was out of scope given the project timeline); LLM triage misclassified 3 of 8 deliberately ambiguous cases (91.9% precision on code findings); the pre-filter model is a distillation of LLM judgment, not independent ground truth, so it inherits any systematic LLM bias; its training data (3,004 findings, 6 repos) is Python-only; no Alertmanager wiring; scanning is synchronous; a failed `POST /scans` doesn't return a run id.*
+*English summary: scanner coverage is incomplete (3 of 17 known vulnerabilities were never flagged by Bandit/Semgrep, because both are pattern-based rather than taint-analysis tools; a broader ruleset or a taint-analysis tool such as Semgrep Pro or CodeQL would address this but was out of scope given the project timeline); LLM triage is non-deterministic and confirmed 2-3 false positives per run (precision 90.6-93.5% on code findings over three runs); the pre-filter model is a distillation of LLM judgment, not independent ground truth, so it inherits any systematic LLM bias; its 91.2% coverage on held-out repos was not independently validated and drops to 1.6% in live runs on the dummy repo; its training data (3,004 findings, 6 repos) is Python-only; behind a proxy pip-audit reports a scanner error and returns no dependency findings; tested on Linux only; no Alertmanager wiring; scanning is synchronous; a failed `POST /scans` doesn't return a run id.*
 
-## KI-Einsatz / AI usage
+## KI-Einsatz / AI Assistance
 
-Dieses Projekt wurde mit Unterstützung von Claude (Architektur, Code-Review, Dokumentation) entwickelt. Details folgen hier nach Projektabschluss.
+Bei der Entwicklung dieses Projekts wurden KI-gestützte Werkzeuge gezielt als Entwicklungs- und Analyseassistenten eingesetzt. Claude (Anthropic) kam insbesondere bei Architekturüberlegungen, Implementierung von Programmcode, Entwicklung und Überprüfung von Tests, Fehlersuche, Analyse von Messergebnissen und technischer Dokumentation zum Einsatz.
 
-This project was developed with assistance from Claude (architecture, code review, documentation). Details to follow after project completion.
+Die Projektkonzeption, die Festlegung des Funktionsumfangs und die wesentlichen technischen Entscheidungen lagen beim Autor. Bei der Datenbasis legte der Autor den Ansatz fest (bestehende Repositories aus Git übernehmen, ein eigenes Testrepo erzeugen); die Suche nach geeigneten Repositories erfolgte mit Claude. Ebenso erfolgten die fachliche Bewertung der Ergebnisse sowie die Entscheidung über die Übernahme und Freigabe der Implementierungen durch den Autor.
+
+Die Implementierungen wurden lokal ausgeführt und überprüft. Der Autor führte die Tests sowie sämtliche Schritte des Frisch-Klon-Tests (Klonen, Bauen, Training und Scans) auf dem eigenen Rechner durch. Die Mutationsprüfung der Tests und die Auswertung der Messdaten wurden unter Einsatz von Claude durchgeführt und vom Autor bewertet. Die Versionsverwaltung und Übertragung der Änderungen in das Repository erfolgten durch den Autor mittels Git.
+
+Das Coverbild wurde mit ChatGPT (OpenAI) auf Grundlage einer Vorgabe des Autors KI-generiert.
 
 ## Lizenz / License
 
