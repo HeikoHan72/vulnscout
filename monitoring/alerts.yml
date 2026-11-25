@@ -81,4 +81,4 @@ groups:
         labels:
           schwere: info
         annotations:
-          zusammenfassung: "95 % der Scans brauchen länger als zehn Minuten."
+          zusammenfassung: "Das geschätzte 95. Perzentil der Scan-Dauer liegt über zehn Minuten."
