@@ -53,7 +53,7 @@ pip-audit liefert jede Schwachstelle doppelt (51 Einträge, 26 eindeutige im Tes
 
 Die OSV-Anreicherung (`osv.py`) fragt für Abhängigkeits-Funde bei `api.osv.dev` das Schweregrad-Wort, alle CVSS-Vektoren und CWE-Kennungen ab (parallel mit 8 Arbeitern, Zeitbudget 30 s, Zwischenspeicher im Arbeitsspeicher für 1 Stunde). Ist der Dienst nicht erreichbar, läuft der Scan unverändert weiter (fail-open, Metrik `vulnscout_osv_enrichment_total`). Abschaltbar über `VULNSCOUT_OSV_ENABLED`. Die Anzeige (`display.py`) benennt das Wort als Angabe der Datenbank, zeigt alle Vektoren und warnt, wenn mehrere Vektoren zu unterschiedlichen Stufen führen können.
 
-Nach der Triage hebt `floor.py` bestätigte pip-audit-Funde mindestens auf den OSV-Wert an (Ursprungswert in `severity_raised_from`, Vermerk in der Begründung, Metrik `vulnscout_severity_floor_total`). Das ist eine bewusste Abwägung: Die Triage sieht keinen Code-Kontext, und ein Sicherheitswerkzeug soll nicht untertreiben. Die Untergrenze ist fail-open. In den drei Live-Läufen vom 24.11.2026 hat sie nichts angehoben; ihre Wirkung ist durch Tests belegt, nicht durch einen Live-Fall.
+Nach der Triage hebt `floor.py` bestätigte pip-audit-Funde mindestens auf den OSV-Wert an (Ursprungswert in `severity_raised_from`, Vermerk in der Begründung, Metrik `vulnscout_severity_floor_total`). Das ist eine bewusste Abwägung: Die Triage sieht keinen Code-Kontext, und ein Sicherheitswerkzeug soll nicht untertreiben. Die Untergrenze ist fail-open. In allen sieben Live-Läufen (drei am 24.11.2026, vier am 25.11.2026) hat sie nichts angehoben; ihre Wirkung ist durch Tests belegt, nicht durch einen Live-Fall.
 
 ### Triage-Agent (`src/triage_agent/`)
 
@@ -65,7 +65,7 @@ Nicht jeder Scanner-Fund braucht einen LLM-Aufruf, um entschieden zu werden – 
 
 **Wichtige Einschränkung, offen benannt statt versteckt:** Die Trainingslabels stammen vom Triage-Agenten selbst (LLM), nicht von menschlicher Ground Truth. Das Modell destilliert also das Urteil des LLM (*knowledge distillation*) – es lernt vorherzusagen, was der Triage-Agent sagen würde, nicht unabhängig, ob ein Fund real ist. Die berichtete Fehlerrate ist dementsprechend eine Abweichung vom LLM-Urteil, keine Abweichung von der Wahrheit. Für eine unabhängige Qualitätsaussage über den Scanner-Stack insgesamt bleibt die Ground-Truth-Evaluation in `scripts/evaluate.py` maßgeblich (siehe README, Abschnitt Evaluation).
 
-**Trainingsdaten:** `scripts/label_repos.py` scannt sechs Repositories (vier bewusst verwundbare: `dummy_vuln_repo`, OWASP PyGoat, Vulnerable-Flask-App, DVPWA; zwei weit verbreitete Open-Source-Bibliotheken als Negativbeispiele: `requests`, `click`) und lässt jeden Fund von der Triage bewerten (Consensus-Check dafür deaktiviert, um Kosten zu sparen – für einen Trainingsdatensatz vertretbar, im echten Scan-Betrieb bleibt er an). Ergebnis: `scripts/training_data.jsonl`, ein Datensatz aus realen Scanner-Funden mit LLM-Label, nicht aus synthetischen Beispielen. Er liegt direkt im Repository (1,4 MB). Die 214 Semgrep-Zeilen stammen von einem lokal geklonten Regelwerk mit anderen Regel-Kennungen als das im Betrieb genutzte `p/security-audit`.
+**Trainingsdaten:** `scripts/label_repos.py` scannt sechs Repositories (vier bewusst verwundbare: `dummy_vuln_repo`, OWASP PyGoat, Vulnerable-Flask-App, DVPWA; zwei weit verbreitete Open-Source-Bibliotheken als Vergleichsbibliotheken: `requests`, `click`; ihre Freiheit von Schwachstellen ist nicht nachgewiesen) und lässt jeden Fund von der Triage bewerten (Consensus-Check dafür deaktiviert, um Kosten zu sparen – für einen Trainingsdatensatz vertretbar, im echten Scan-Betrieb bleibt er an). Ergebnis: `scripts/training_data.jsonl`, ein Datensatz aus realen Scanner-Funden mit LLM-Label, nicht aus synthetischen Beispielen. Er liegt direkt im Repository (1,4 MB). Die 214 Semgrep-Zeilen stammen von einem lokal geklonten Regelwerk mit anderen Regel-Kennungen als das im Betrieb genutzte `p/security-audit`.
 
 **Methodik (`scripts/train_prefilter.py`):**
 - Split nach Repository, nicht nach Zeile: `Vulnerable-Flask-App` und `click` werden beim Training nie gesehen, um Datenleckage zu vermeiden (ein Modell, das Zeilen aus demselben Repo in Training und Test hat, wirkt sonst künstlich besser).
@@ -117,7 +117,7 @@ Erfasst werden:
 | Scanner | Funde je Werkzeug, Ausfälle je Werkzeug |
 | Triage | Ergebnisse (bestätigt, Fehlalarm, kein Konsens), Konfidenzverteilung, bestätigte Funde je Schweregrad |
 | LLM | Aufrufe nach Ergebnis, Latenz, Fehler nach Art |
-| Pre-Filter | Entscheidungen (automatisch bestätigt/verworfen, eskaliert, kein Modell verfügbar), eingesparte LLM-Aufrufe |
+| Pre-Filter | Entscheidungen (automatisch bestätigt/verworfen, eskaliert, kein Modell verfügbar), geschätzte eingesparte LLM-Aufrufe (ein Aufruf je automatisch entschiedenem Fund) |
 
 `monitoring/prometheus.yml` legt fest, dass Prometheus die API alle fünf Sekunden abfragt. `monitoring/alerts.yml` enthält die Alarmregeln, `monitoring/grafana/` die Datenquelle und das Dashboard. Alle drei Dienste starten über Docker Compose, gebunden an `127.0.0.1` – Grafana läuft ohne Anmeldung und wäre im Netzwerk sonst offen.
 
@@ -125,7 +125,7 @@ Erfasst werden:
 
 ### Containerisierung & CI
 
-Docker-Image auf Basis `python:3.11-slim`, läuft als nicht-root-Nutzer, mit `HEALTHCHECK` gegen `/health`. Docker Compose bindet Port 8000, lädt `.env`, persistiert die SQLite-Datenbank in einem benannten Volume. GitHub Actions (`ci.yml`) installiert Abhängigkeiten und führt `pytest` bei jedem Push/PR auf `main` aus.
+Docker-Image auf Basis `python:3.11-slim`, läuft als nicht-root-Nutzer, mit `HEALTHCHECK` gegen `/health`. Docker Compose bindet Port 8000, lädt `.env`, persistiert die SQLite-Datenbank in einem benannten Volume. GitHub Actions (`ci.yml`) installiert Abhängigkeiten und führt `pytest` bei jedem Push/PR auf `main` aus (Python 3.11). Die CI baut kein Image und deployt nichts. Das Render-Deployment der Demo (Auto-Deploy bei neuem Commit) ist keine Stufe der CI: `ci.yml` enthält keinen Deploy-Schritt.
 
 ## Datenfluss und Persistenz
 
@@ -165,6 +165,6 @@ Die Datenbank ist die einzige Quelle der Wahrheit für den Laufstatus; die FastA
 - Die Prometheus-Kennzahlen leben im Arbeitsspeicher des API-Prozesses. Läufe, die direkt per Kommandozeile gestartet werden, erscheinen nicht unter `/metrics`. Bei mehreren API-Prozessen (etwa mit mehreren Uvicorn-Workern) würde jeder Prozess eigene Zähler führen; dafür wäre der Multiprozess-Modus von `prometheus_client` nötig.
 - Prometheus wertet die Alarmregeln aus, versendet aber nichts: Es gibt keinen Alertmanager und damit keine Benachrichtigung per E-Mail oder Chat. Die Alarme sind nur in der Prometheus-Oberfläche sichtbar.
 - Die Trainingslabels des Pre-Filter-Modells stammen vom Triage-Agenten (LLM), nicht von menschlicher Ground Truth (Distillation, siehe Abschnitt "Pre-Filter-Modell" oben) - die Fehlerrate des Modells ist eine Abweichung vom LLM-Urteil, keine unabhängige Genauigkeitsaussage.
-- Der Trainingsdatensatz für den Pre-Filter deckt sechs Repositories ab (drei verwundbare, drei saubere) - genug für eine erste, ehrliche Kostenersparnis-Kennzahl, aber keine breite Stichprobe über viele Projektarten/Programmiersprachen hinweg. Das Modell ist zudem nur für Python trainiert, wie der Rest von VulnScout.
+- Der Trainingsdatensatz für den Pre-Filter deckt sechs Repositories ab (vier verwundbare, zwei Vergleichsbibliotheken) - genug für eine erste, ehrliche Kostenersparnis-Kennzahl, aber keine breite Stichprobe über viele Projektarten/Programmiersprachen hinweg. Das Modell ist zudem nur für Python trainiert, wie der Rest von VulnScout.
 
 Eine nutzerorientierte Zusammenfassung der Grenzen (Evaluationsumfang, bekannte Fehlklassifikationen) steht im README, Abschnitte Evaluation und Limitations.

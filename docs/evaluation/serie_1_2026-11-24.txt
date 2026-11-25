@@ -1,0 +1,115 @@
+# Serie 1: drei Läufe vom 24.11.2026
+# Aufruf je Lauf: python scripts/evaluate.py --db <vulnscout.db> --run-id <Lauf-ID>
+# Datenbank: aus dem API-Container kopiert am 25.11.2026 (docker compose cp api:/app/data/vulnscout.db ./auswertung.db)
+# Läufe ausgeführt am 24.11.2026; Test-Repo test_repos/dummy_vuln_repo (62 Funde je Lauf), echte LLM-Aufrufe, kein Demo-Modus.
+# Die Ausgaben unten sind unverändert.
+
+################ Lauf e9379308-b087-490c-978a-59f520b8c1b6
+Lauf: e9379308-b087-490c-978a-59f520b8c1b6
+Funde gesamt: 62  {'bandit': 21, 'pip-audit': 26, 'semgrep': 15}
+
+--- Code-Funde ---
+  richtig bestätigt     28
+  fälschlich bestätigt  2
+  richtig verworfen     4
+  fälschlich verworfen  1
+  zur Prüfung offen     1
+  Precision 93.3%   Recall 96.6%   F1 94.9%
+
+--- Abhängigkeiten ---
+  richtig bestätigt     26
+  fälschlich bestätigt  0
+  richtig verworfen     0
+  fälschlich verworfen  0
+  zur Prüfung offen     0
+  Precision 100.0%   Recall 100.0%   F1 100.0%
+
+  Hinweis: Jeder Fund in der requirements-Datei gilt als erwartet echt.
+  Die Kennzahlen zeigen daher nur, dass nichts verworfen wurde.
+
+--- Abhängigkeiten: Einstufung gegen OSV (nur bestätigte Funde) ---
+  bestätigt                         26
+  ohne OSV-Schweregrad              0
+  Einstufung gleich OSV             26
+  Einstufung höher als OSV          0
+  Einstufung niedriger als OSV      0
+  durch die Untergrenze angehoben   0
+
+Von den Scannern übersehen (kein Fund, obwohl Lücke vorhanden):
+  - path_traversal (utils.py, read_log)
+  - ssrf (network.py, fetch_remote_resource)
+  - hartcodiertes_secret (config.py, <modul>)
+
+
+################ Lauf 7a4a1420-5c85-4463-b3a0-fd7f2e8d1502
+Lauf: 7a4a1420-5c85-4463-b3a0-fd7f2e8d1502
+Funde gesamt: 62  {'bandit': 21, 'pip-audit': 26, 'semgrep': 15}
+
+--- Code-Funde ---
+  richtig bestätigt     29
+  fälschlich bestätigt  3
+  richtig verworfen     3
+  fälschlich verworfen  0
+  zur Prüfung offen     1
+  Precision 90.6%   Recall 100.0%   F1 95.1%
+
+--- Abhängigkeiten ---
+  richtig bestätigt     26
+  fälschlich bestätigt  0
+  richtig verworfen     0
+  fälschlich verworfen  0
+  zur Prüfung offen     0
+  Precision 100.0%   Recall 100.0%   F1 100.0%
+
+  Hinweis: Jeder Fund in der requirements-Datei gilt als erwartet echt.
+  Die Kennzahlen zeigen daher nur, dass nichts verworfen wurde.
+
+--- Abhängigkeiten: Einstufung gegen OSV (nur bestätigte Funde) ---
+  bestätigt                         26
+  ohne OSV-Schweregrad              0
+  Einstufung gleich OSV             26
+  Einstufung höher als OSV          0
+  Einstufung niedriger als OSV      0
+  durch die Untergrenze angehoben   0
+
+Von den Scannern übersehen (kein Fund, obwohl Lücke vorhanden):
+  - path_traversal (utils.py, read_log)
+  - ssrf (network.py, fetch_remote_resource)
+  - hartcodiertes_secret (config.py, <modul>)
+
+
+################ Lauf 313c45c3-fde9-409a-ac55-04be3167be33
+Lauf: 313c45c3-fde9-409a-ac55-04be3167be33
+Funde gesamt: 62  {'bandit': 21, 'pip-audit': 26, 'semgrep': 15}
+
+--- Code-Funde ---
+  richtig bestätigt     29
+  fälschlich bestätigt  2
+  richtig verworfen     5
+  fälschlich verworfen  0
+  zur Prüfung offen     0
+  Precision 93.5%   Recall 100.0%   F1 96.7%
+
+--- Abhängigkeiten ---
+  richtig bestätigt     26
+  fälschlich bestätigt  0
+  richtig verworfen     0
+  fälschlich verworfen  0
+  zur Prüfung offen     0
+  Precision 100.0%   Recall 100.0%   F1 100.0%
+
+  Hinweis: Jeder Fund in der requirements-Datei gilt als erwartet echt.
+  Die Kennzahlen zeigen daher nur, dass nichts verworfen wurde.
+
+--- Abhängigkeiten: Einstufung gegen OSV (nur bestätigte Funde) ---
+  bestätigt                         26
+  ohne OSV-Schweregrad              0
+  Einstufung gleich OSV             26
+  Einstufung höher als OSV          0
+  Einstufung niedriger als OSV      0
+  durch die Untergrenze angehoben   0
+
+Von den Scannern übersehen (kein Fund, obwohl Lücke vorhanden):
+  - path_traversal (utils.py, read_log)
+  - ssrf (network.py, fetch_remote_resource)
+  - hartcodiertes_secret (config.py, <modul>)
