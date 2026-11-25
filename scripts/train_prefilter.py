@@ -33,7 +33,7 @@ Methodik:
   der Trainings-Repos.
 - Qualitäts-Gate: Ein Kandidat wird nur Champion, wenn seine
   Fehlerrate auf den automatisch entschiedenen Fällen der Test-Repos
-  unter MAX_ERROR_RATE bleibt. Besteht kein Kandidat das Gate, bleibt
+  höchstens MAX_ERROR_RATE beträgt. Besteht kein Kandidat das Gate, bleibt
   der bisherige Champion unverändert (konservativ: lieber kein neues
   Modell als ein schlechteres in Produktion).
 

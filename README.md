@@ -14,7 +14,7 @@ Multi-agent system that scans code repositories for security vulnerabilities, us
 |---|---|---|
 | Experiment-Tracking | MLflow (eigener Compose-Dienst) | [Pre-Filter-Modell](#pre-filter-modell--kostenersparnis) |
 | Modell-Versionierung | MLflow Model Registry, Version 1 bis 6, Aliase `champion` (v6) und `challenger` (v5) | [Pre-Filter-Modell](#pre-filter-modell--kostenersparnis) |
-| Qualitäts-Gate | Kandidat wird nur Champion bei Fehlerrate unter 2 % auf den automatisch entschiedenen Test-Funden; derselbe Test läuft in pytest | [Architektur](docs/architecture.md) |
+| Qualitäts-Gate | Kandidat wird nur Champion, wenn auf den Test-Repos Fehlerrate und Miss-Rate jeweils höchstens 2 % betragen (und mindestens ein Fund automatisch entschieden wurde); derselbe Test läuft in pytest | [Architektur](docs/architecture.md) |
 | Monitoring | Prometheus und Grafana, 7 Alarmregeln (ohne Alertmanager, nur in der Prometheus-Oberfläche sichtbar) | [Monitoring](#monitoring) |
 | Container | Docker, Docker Compose (API, MLflow, Prometheus, Grafana) | [Schnellstart](#schnellstart--quickstart) |
 | Automatisierte Tests | pytest; GitHub Actions `CI` führt sie bei jedem Push und Pull Request auf `main` aus (Python 3.11) | [Tech-Stack](#tech-stack) |
@@ -139,7 +139,7 @@ Details: [docs/architecture.md](docs/architecture.md)
 | Prometheus | http://localhost:9090 | Kennzahlen abfragen, Alarmregeln prüfen |
 | Grafana | http://localhost:3000 | Dashboard (ohne Anmeldung) |
 
-Erfasst werden die vier goldenen Signale (Verkehr, Fehler, Latenz, Sättigung) sowie fachliche Kennzahlen: Scans nach Ergebnis und Dauer, Funde je Scanner, Scanner-Ausfälle, Triage-Ergebnisse (bestätigt, Fehlalarm, kein Konsens), Verteilung der Triage-Konfidenz, Latenz und Fehler des Sprachmodells, Pre-Filter-Entscheidungen (automatisch bestätigt/verworfen, eskaliert, geschätzte eingesparte LLM-Aufrufe), OSV-Anreicherung (`vulnscout_osv_enrichment_total`) und Schweregrad-Untergrenze (`vulnscout_severity_floor_total`). Die beiden letzten sind unter `/metrics` und in Prometheus abrufbar, aber im Grafana-Dashboard nicht dargestellt. Alarmregeln liegen in [`monitoring/alerts.yml`](monitoring/alerts.yml).
+Erfasst werden drei der vier goldenen Signale (Verkehr, Fehler, Latenz). Die Sättigung (Auslastung von CPU und Arbeitsspeicher) wird nicht überwacht: Dafür gibt es weder eine eigene Metrik noch eine Kachel im Grafana-Dashboard noch eine Alarmregel. Dazu kommen fachliche Kennzahlen: Scans nach Ergebnis und Dauer, Funde je Scanner, Scanner-Ausfälle, Triage-Ergebnisse (bestätigt, Fehlalarm, kein Konsens), Verteilung der Triage-Konfidenz, Latenz und Fehler des Sprachmodells, Pre-Filter-Entscheidungen (automatisch bestätigt/verworfen, eskaliert, geschätzte eingesparte LLM-Aufrufe), OSV-Anreicherung (`vulnscout_osv_enrichment_total`) und Schweregrad-Untergrenze (`vulnscout_severity_floor_total`). Die beiden letzten sind unter `/metrics` und in Prometheus abrufbar, aber im Grafana-Dashboard nicht dargestellt. Alarmregeln liegen in [`monitoring/alerts.yml`](monitoring/alerts.yml).
 
 **Hinweis zur Kennzahl "eingesparte LLM-Aufrufe":** Sie ist ein Schätzwert. Der Zähler (`vulnscout_prefilter_skipped_llm_calls_total`) erhöht sich um die Zahl der automatisch entschiedenen Funde, also um einen Aufruf je Fund. Die LLM-Triage arbeitet aber in Gruppen zu je 5 Funden, die tatsächlich eingesparte Zahl an API-Aufrufen ist daher kleiner. Gemessen ist nur die Zahl der automatisch entschiedenen Funde. Beide Größen werden hier getrennt ausgewiesen.
 
@@ -149,7 +149,7 @@ Erfasst werden die vier goldenen Signale (Verkehr, Fehler, Latenz, Sättigung) s
 
 ![Grafana-Dashboard, untere Hälfte](docs/images/Dashboard_02.png)
 
-*Grafana, unten (dieselben vier Läufe): Triage 226 bestätigt, 20 Fehlalarm und 2 zur Prüfung (Summe der vier Läufe). Pre-Filter: 4 Funde automatisch entschieden und bestätigt (1 pro Lauf, gemessen), Abdeckung 1,61 %; die Kachel "eingesparte LLM-Aufrufe" (4) ist ein Schätzwert (ein Aufruf je automatisch entschiedenem Fund). / Grafana, bottom (same four runs): triage 226 confirmed, 20 false positives and 2 needing review (sum of the four runs). Pre-filter: 4 findings decided and confirmed automatically (1 per run, measured), coverage 1.61%; the "saved LLM calls" tile (4) is an estimate (one call per automatically decided finding).*
+*Grafana, unten (dieselben vier Läufe): Triage 226 bestätigt, 20 Fehlalarm und 2 zur Prüfung (Summe der vier Läufe). Pre-Filter: 4 Funde automatisch entschieden und bestätigt (1 pro Lauf, gemessen), Abdeckung 1,61 %; die Kachel "Eingesparte LLM-Aufrufe (gesamt)" (4) ist ein Schätzwert (ein Aufruf je automatisch entschiedenem Fund). Der Screenshot zeigt den Titel so, wie er zum Zeitpunkt der Aufnahme hieß; die Kachel heißt inzwischen "Eingesparte LLM-Aufrufe (gesamt, geschätzt)". / Grafana, bottom (same four runs): triage 226 confirmed, 20 false positives and 2 needing review (sum of the four runs). Pre-filter: 4 findings decided and confirmed automatically (1 per run, measured), coverage 1.61%; the "saved LLM calls" tile (4) is an estimate (one call per automatically decided finding). The screenshot shows the tile title as it was when the screenshot was taken; the tile is now titled "Eingesparte LLM-Aufrufe (gesamt, geschätzt)" (estimated).*
 
 Besonders relevant ist der Alarm `ScannerFaelltAus`: Ein ausgefallenes Scanner-Werkzeug liefert keine Funde – im Bericht sieht das aus wie eine saubere Codebasis. Das Monitoring macht den Unterschied sichtbar.
 
@@ -159,7 +159,7 @@ Besonders relevant ist der Alarm `ScannerFaelltAus`: Ein ausgefallenes Scanner-W
 
 **Einschränkung:** Die Kennzahlen leben im Arbeitsspeicher des API-Prozesses. Nur Läufe über `POST /scans` erscheinen unter `/metrics`; ein direkt per Kommandozeile gestarteter Lauf nicht.
 
-`docker compose up` also starts Prometheus and Grafana alongside the API (ports 9090 and 3000). Metrics cover the four golden signals plus domain metrics: scans by outcome and duration, findings per scanner, scanner failures, triage outcomes, triage-confidence distribution, and LLM latency and errors. Note that metrics live in the API process, so only runs started via `POST /scans` are recorded.
+`docker compose up` also starts Prometheus and Grafana alongside the API (ports 9090 and 3000). Metrics cover three of the four golden signals (traffic, errors, latency); saturation (CPU and memory utilisation) is not monitored, there is no metric, dashboard panel or alert rule for it. In addition there are domain metrics: scans by outcome and duration, findings per scanner, scanner failures, triage outcomes, triage-confidence distribution, and LLM latency and errors. Note that metrics live in the API process, so only runs started via `POST /scans` are recorded.
 
 ## Pre-Filter-Modell / Kostenersparnis
 
@@ -176,7 +176,7 @@ Der Trainingsdatensatz (`scripts/training_data.jsonl`, 1,4 MB) liegt direkt im R
 | Champion-Modell | Random Forest (Challenger: Logistic Regression) |
 | Abdeckung auf den Test-Repos (automatisch entschieden, kein LLM-Aufruf) | **91,2 %** (1.461 von 1.602 Funden) |
 | Abweichung vom LLM-Urteil bei den automatisch entschiedenen Funden | 0 von 1.461 (0,00 %); obere 95-%-Grenze nach der Dreierregel etwa 0,2 % |
-| Qualitäts-Gate | < 2 % Fehlerrate – bestanden |
+| Qualitäts-Gate | Fehlerrate höchstens 2 % und Miss-Rate höchstens 2 % – bestanden (beide 0 %; Definitionen siehe unten) |
 | Trainingsdaten / Testdaten | 1.402 / 1.602 Zeilen |
 | Test-Repos | `click`, `vulnerable_flask_app` |
 | Abdeckung im Live-Lauf auf dem Dummy-Repo, Serie 1 (24.11., 3 Läufe, 186 Funde) | **1,6 %** (3 Funde) |
@@ -193,6 +193,13 @@ Der Trainingsdatensatz (`scripts/training_data.jsonl`, 1,4 MB) liegt direkt im R
 ![MLflow: Run der Version 6](docs/images/Random_Forest.png)
 
 *Run random_forest (Version 6): test_coverage 91,2 %, test_error_rate 0, test_miss_rate 0, Qualitäts-Gate bestanden. Precision 51,4 %, Recall 81,8 % und F1 63,2 % sind einfache Klassifikationswerte des Modells ohne die Schwellen 0,8 und 0,05; für das Qualitäts-Gate zählen nur Fehlerrate und Miss-Rate. / Run random_forest (version 6): test_coverage 91.2%, test_error_rate 0, test_miss_rate 0, quality gate passed. Precision 51.4%, recall 81.8% and F1 63.2% are plain classification scores of the model without the thresholds 0.8 and 0.05; the quality gate only uses error rate and miss rate.*
+
+**Qualitäts-Gate, Definition:** Ein Kandidat wird nur Champion, wenn alle drei Bedingungen auf den beiden Test-Repos erfüllt sind (in `scripts/train_prefilter.py`: `test_error_rate <= MAX_ERROR_RATE`, `test_miss_rate <= MAX_MISS_RATE_TEST`, beide Grenzen 0,02, sowie mindestens ein automatisch entschiedener Fund):
+
+- **Fehlerrate (`test_error_rate`):** Anteil der automatischen Entscheidungen, die vom LLM-Label abweichen, bezogen auf alle automatisch entschiedenen Funde (bestätigt und verworfen). Grenze: höchstens 2 %.
+- **Miss-Rate (`test_miss_rate`):** Anteil der automatisch verworfenen Funde, die laut LLM-Label echte Schwachstellen sind, bezogen auf alle automatisch verworfenen Funde. Grenze: höchstens 2 %. Sie gilt der Verwerfungsseite, weil ein zu Unrecht verworfener Fund lautlos verschwindet.
+
+Beide Größen sind Abweichungen vom LLM-Urteil, keine Abweichungen von der Wahrheit. Für das Champion-Modell (Version 6) sind beide 0 (0 von 1.461 automatisch entschiedenen Funden; die 1.461 sind alle verworfen).
 
 91,2 % der Funde auf den beiden nie gesehenen Test-Repos wurden ohne LLM-Aufruf entschieden (alle als Fehlalarm verworfen), ohne dass eine dieser Entscheidungen vom LLM-Urteil abwich. Die übrigen 8,8 % gingen an die Triage. Das gilt für dieses Test-Set und gemessen am LLM-Urteil, nicht an unabhängiger Ground Truth.
 
@@ -270,6 +277,7 @@ Zusätzlich wurden 6 Repositories (die vier oben plus `requests` und `click`) vo
 - **Das Pre-Filter-Modell ist nicht im Repository:** Es entsteht erst durch das Training (Schnellstart) und liegt dann in der MLflow Registry des eigenen Compose-Stacks. Ohne trainiertes Modell läuft VulnScout im Rückfallbetrieb: Jeder Fund geht an die LLM-Triage, die Kostenersparnis entfällt. Der API-Prozess lädt das Modell beim ersten Scan; wurde danach trainiert, ist ein `docker compose restart api` nötig.
 - **Hinter einem Proxy** fehlen die Proxy-Variablen in den Scanner-Prozessen: pip-audit meldet dann einen Scanner-Fehler (sichtbar im Bericht, in der Datenbank und in der Metrik `vulnscout_scanner_errors_total`) und liefert keine Abhängigkeits-Funde; Bandit und Semgrep laufen weiter. Nicht getestet unter Windows und macOS.
 - **Schweregrad-Untergrenze live ungeprüft:** Sie hat in allen sieben Live-Läufen nichts angehoben; ihre Wirkung ist nur durch Tests belegt.
+- **Sättigung nicht überwacht:** Vom Golden-Signals-Viergespann (Verkehr, Fehler, Latenz, Sättigung) sind nur die ersten drei umgesetzt. Auslastung von CPU und Arbeitsspeicher wird weder gemessen noch angezeigt noch alarmiert.
 - **Kein Alertmanager:** Die 7 Prometheus-Alarmregeln werden ausgewertet, aber nicht versendet – nur in der Prometheus-Oberfläche sichtbar.
 - **Kein asynchrones Scanning:** `POST /scans` läuft synchron, ein Scan pro Request.
 - **Bekannte API-Einschränkung:** Bei Fehlschlag von `POST /scans` fehlt die Lauf-ID in der Fehlerantwort.
