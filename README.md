@@ -20,6 +20,19 @@ API-Doku / API docs: http://localhost:8000/docs
 
 Without an `ANTHROPIC_API_KEY`, the system automatically runs in demo/fixture mode – deterministic triage and report results with no LLM call, so anyone can try the project without their own API key. The mode can also be forced explicitly via `demo_mode: true/false` in the `POST /scans` request.
 
+**Pre-Filter-Modell trainieren / Train the pre-filter model:** Nach dem Klonen liegt noch kein Modell in der MLflow Registry. Ohne Modell läuft VulnScout trotzdem, schickt aber jeden Fund an die LLM-Triage. Zum Trainieren, bei laufendem `docker compose up`, in einem zweiten Terminal (Python 3.11, Linux/macOS):
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python -m scripts.train_prefilter
+docker compose restart api   # nur nötig, wenn vorher schon ein Scan lief
+```
+
+Das Training nutzt den mitgelieferten Datensatz `scripts/training_data.jsonl` (3.004 Funde, 1,4 MB), braucht keinen API-Key und registriert den Champion in der MLflow Registry. Der API-Prozess lädt das Modell beim ersten Scan und merkt sich ein fehlendes Modell bis zum Neustart – daher der `restart`.
+
+After cloning, the MLflow registry holds no model yet. VulnScout still runs without one but sends every finding to the LLM triage. To train it, run the commands above in a second terminal while `docker compose up` is running. Training uses the bundled dataset `scripts/training_data.jsonl` (3,004 findings, 1.4 MB), needs no API key and registers the champion in the MLflow registry. The API process loads the model on the first scan and remembers a missing model until restart, hence the `restart`.
+
 ## Architektur / Architecture
 
 ```
@@ -64,7 +77,7 @@ Nicht jeder Scanner-Fund braucht einen LLM-Aufruf: Ein von pip-audit gemeldetes 
 
 Trainiert auf 3004 realen Scanner-Funden aus 6 Repositories (4 bewusst verwundbare: eigenes Dummy-Repo, OWASP PyGoat, Vulnerable Flask App, DVPWA; 2 saubere Open-Source-Bibliotheken als Negativbeispiele: `requests`, `click`). `Vulnerable-Flask-App` und `click` wurden beim Training nie gesehen (repo-weiser Split, Testdaten).
 
-Der Trainingsdatensatz (`scripts/training_data.jsonl`) ist per [DVC](https://dvc.org) versioniert statt direkt in Git – nur die Metadatei (`scripts/training_data.jsonl.dvc`) liegt im Repo. Der DVC-Remote ist aktuell ein lokaler Ordner auf der Entwicklungsmaschine; Dritte, die den Pre-Filter neu trainieren wollen, brauchen die Rohdaten separat (`dvc pull` funktioniert nur mit Zugriff auf diesen Remote). Zum reinen Ausführen von VulnScout wird die Datei nicht gebraucht – nur zum Nachtrainieren des Pre-Filter-Modells.
+Der Trainingsdatensatz (`scripts/training_data.jsonl`, 1,4 MB) liegt direkt im Repository, damit jeder das Modell ohne API-Kosten selbst trainieren kann (Anleitung im Schnellstart). Zum reinen Ausführen von VulnScout wird er nicht gebraucht – nur zum Trainieren des Pre-Filter-Modells.
 
 | Kennzahl | Wert |
 |---|---|
@@ -85,7 +98,7 @@ Der Trainingsdatensatz (`scripts/training_data.jsonl`) ist per [DVC](https://dvc
 - Pre-Filter-Modell: scikit-learn (Logistic Regression / Random Forest), MLflow Model Registry (Champion/Challenger)
 - API: FastAPI
 - Tracking: MLflow (Experiment-Tracking + Model Registry)
-- Datenversionierung: DVC (Trainingsdatensatz des Pre-Filter-Modells)
+- Trainingsdaten: `scripts/training_data.jsonl` direkt im Repository (1,4 MB)
 - Monitoring: Prometheus, Grafana
 - Container: Docker, Docker Compose
 - CI: GitHub Actions, pytest (inkl. Qualitäts-Gate für das Pre-Filter-Modell)
@@ -116,7 +129,7 @@ Zusätzlich wurden 6 Repositories (die vier oben plus `requests` und `click`) vo
 - **LLM-Triage ist nicht fehlerfrei:** 3 von 8 bewusst mehrdeutigen Fällen (z. B. harmloses `shell=True` ohne Benutzereingabe) wurden fälschlich als echte Schwachstelle bestätigt – daher 91,9 % statt 100 % Precision bei Code-Funden.
 - **Pre-Filter-Modell ist Distillation, keine unabhängige Verifikation:** Es lernt, die LLM-Bewertung vorherzusagen, nicht die Wahrheit selbst. Ein systematischer Fehler der LLM-Triage würde vom Pre-Filter übernommen statt korrigiert.
 - **Trainingsdatensatz für den Pre-Filter ist klein und Python-only:** 3.004 Funde aus 6 Repositories, ausschließlich Python. Für andere Sprachen oder stark abweichende Codebasen ist keine Aussage über die Pre-Filter-Qualität möglich.
-- **DVC-Remote ist lokal, nicht öffentlich erreichbar:** Der Trainingsdatensatz des Pre-Filter-Modells liegt per DVC versioniert in einem lokalen Ordner außerhalb des Repos. Wer das Repository klont, kann den Pre-Filter nutzen (Modell liegt in der MLflow Registry), aber nicht ohne Weiteres neu trainieren – dafür bräuchte es einen öffentlichen Remote (z. B. S3/GCS), was im Projektrahmen nicht umgesetzt wurde.
+- **Das Pre-Filter-Modell ist nicht im Repository:** Es entsteht erst durch das Training (Schnellstart) und liegt dann in der MLflow Registry des eigenen Compose-Stacks. Ohne trainiertes Modell läuft VulnScout im Rückfallbetrieb: Jeder Fund geht an die LLM-Triage, die Kostenersparnis entfällt. Der API-Prozess lädt das Modell beim ersten Scan; wurde danach trainiert, ist ein `docker compose restart api` nötig.
 - **Kein Alertmanager:** Die 7 Prometheus-Alarmregeln werden ausgewertet, aber nicht versendet – nur in der Prometheus-Oberfläche sichtbar.
 - **Kein asynchrones Scanning:** `POST /scans` läuft synchron, ein Scan pro Request.
 - **Bekannte API-Einschränkung:** Bei Fehlschlag von `POST /scans` fehlt die Lauf-ID in der Fehlerantwort.
