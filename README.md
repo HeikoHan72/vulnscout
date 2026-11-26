@@ -1,3 +1,13 @@
+<p align="center">
+  <img src="docs/images/vulnscout_banner.png"
+       width="100%"
+       alt="VulnScout – MLOps, Security and Observability">
+</p>
+
+<p align="center">
+  <sub>AI-generated conceptual illustration. Displayed metrics are illustrative.</sub>
+</p>
+
 # VulnScout
 
 [![CI](https://github.com/HeikoHan72/vulnscout/actions/workflows/ci.yml/badge.svg)](https://github.com/HeikoHan72/vulnscout/actions/workflows/ci.yml)
